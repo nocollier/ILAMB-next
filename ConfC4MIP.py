@@ -24,7 +24,7 @@ class ConfC4MIP(Confrontation):
         pages = []
         pages.append(post.HtmlPage("Feedback","By Model"))
         pages[-1].setHeader("CNAME / RNAME / MNAME")
-        pages[-1].setSections(["Plots by Time","Plots by Mole Fraction"])
+        pages[-1].setSections(["Global states and fluxes","Sensitivity parameters"])
         pages[-1].setRegions(self.regions)
         pages.append(post.HtmlAllModelsPage("AllModels","All Models"))
         pages[-1].setHeader("CNAME / RNAME / MNAME")
@@ -214,87 +214,83 @@ class ConfC4MIP(Confrontation):
         with Dataset(fname) as dset:
             grp  = dset.groups["Feedback"]
             vlst = getVariableList(grp)
-            co2 = Variable(filename=fname,variable_name="co2",groupname="Feedback")
+            co2 = Variable(filename=fname,variable_name="co2"     ,groupname="Feedback")
+            tas = Variable(filename=fname,variable_name="tas_full",groupname="Feedback")
             for vname in ['nbp','fgco2','tas']:
                 f1,a1 = plt.subplots(figsize=(6,5),tight_layout=True)
-                f2,a2 = plt.subplots(figsize=(6,5),tight_layout=True)
                 for var,clr in zip(['full','bgc','rad'],['b','g','r']):
                     pname = "%s_%s" % (vname,var)
                     if pname not in vlst: continue
                     v = Variable(filename=fname,variable_name=pname,groupname="Feedback")
                     a1.plot(v.time/365+1850,v.data,'-',color=clr,label=var.replace("full","FC").upper())
-                    a2.plot(       co2.data,v.data,'-',color=clr,label=var.replace("full","FC").upper())
                 _formatPlot(a1,"[%s]" % v.unit,vname=vname)
-                _formatPlot(a2,"[%s]" % v.unit,xl="[%s]" % co2.unit,vname=vname)
                 f1.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
-                f2.savefig(os.path.join(self.output_path,"%s_global_%sco2.png" % (m.name,vname)))
-                page.addFigure("Plots by Time",
+                page.addFigure("Global states and fluxes",
                                "%s" % vname,
                                "MNAME_global_%s.png" % vname,
                                side   = header[vname],
                                longname = header[vname],
                                legend = False)
-                page.addFigure("Plots by Mole Fraction",
-                               "%s_co2" % vname,
-                               "MNAME_global_%sco2.png" % vname,
-                               side   = header[vname],
-                               legend = False)
                 plt.close()
-            for vname in ['beta','gamma']:
-                f1,a1 = plt.subplots(figsize=(6,5),tight_layout=True)
-                f2,a2 = plt.subplots(figsize=(6,5),tight_layout=True)
-                for suf,lt in zip(['',' (rad)'],['-','--']):
-                    for var,clr in zip(['L','O'],
-                                       [np.asarray([95,184,104])/255,np.asarray([51,175,255])/255]):
-                        pname = "%s%s%s" % (vname,var,suf)
-                        if pname not in vlst: continue
-                        v = Variable(filename=fname,variable_name=pname,groupname="Feedback")
-                        lbl = _pname2lbl(pname)
-                        a1.plot(v.time/365+1850,v.data,lt,color=clr,label=lbl)
-                        a2.plot(       co2.data,v.data,lt,color=clr,label=lbl)
-                _formatPlot(a1,"[%s]" % v.unit,vname=vname)
+                
+            vname = "beta"
+            f2,a2 = plt.subplots(figsize=(6,5),tight_layout=True)
+            for suf,lt in zip(['',' (rad)'],['-','--']):
+                for var,clr in zip(['L','O'],
+                                   [np.asarray([95,184,104])/255,np.asarray([51,175,255])/255]):
+                    pname = "%s%s%s" % (vname,var,suf)
+                    if pname not in vlst: continue
+                    v = Variable(filename=fname,variable_name=pname,groupname="Feedback")
+                    lbl = _pname2lbl(pname)
+                    a2.plot(co2.data,v.data,lt,color=clr,label=lbl)
                 _formatPlot(a2,"[%s]" % v.unit,xl="[%s]" % co2.unit,vname=vname)
-                f1.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
-                f2.savefig(os.path.join(self.output_path,"%s_global_%sco2.png" % (m.name,vname)))
-                page.addFigure("Plots by Time",
+                f2.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
+                page.addFigure("Sensitivity parameters",
                                "%s" % vname,
                                "MNAME_global_%s.png" % vname,
                                side   = header[vname],
                                longname = header[vname],
                                legend = False)
-                page.addFigure("Plots by Mole Fraction",
-                               "%s_co2" % vname,
-                               "MNAME_global_%sco2.png" % vname,
-                               side   = header[vname],
-                               legend = False)
                 plt.close()
-            for vname in ['gain']:
-                f1,a1 = plt.subplots(figsize=(6,5),tight_layout=True)
-                f2,a2 = plt.subplots(figsize=(6,5),tight_layout=True)
-                for suf,lt in zip(['',' (rad)'],['-','--']):
-                    for var,clr in zip(['',],['k']):
-                        pname = "%s%s%s" % (vname,var,suf)
-                        if pname not in vlst: continue
-                        v = Variable(filename=fname,variable_name=pname,groupname="Feedback")
-                        lbl = _pname2lbl(pname)
-                        a1.plot(v.time/365+1850,v.data,lt,color=clr,label=lbl)
-                        a2.plot(       co2.data,v.data,lt,color=clr,label=lbl)
-                _formatPlot(a1,"[%s]" % v.unit,vname=vname)
-                _formatPlot(a2,"[%s]" % v.unit,xl="[%s]" % co2.unit,vname=vname)
-                f1.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
-                f2.savefig(os.path.join(self.output_path,"%s_global_%sco2.png" % (m.name,vname)))
-                page.addFigure("Plots by Time",
+                
+            vname = "gamma"
+            f2,a2 = plt.subplots(figsize=(6,5),tight_layout=True)
+            for suf,lt in zip(['',' (rad)'],['-','--']):
+                for var,clr in zip(['L','O'],
+                                   [np.asarray([95,184,104])/255,np.asarray([51,175,255])/255]):
+                    pname = "%s%s%s" % (vname,var,suf)
+                    if pname not in vlst: continue
+                    v = Variable(filename=fname,variable_name=pname,groupname="Feedback")
+                    lbl = _pname2lbl(pname)
+                    a2.plot(tas.data-tas.data[0],v.data,lt,color=clr,label=lbl)
+                _formatPlot(a2,"[%s]" % v.unit,xl="[%s]" % tas.unit,vname=vname)
+                f2.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
+                page.addFigure("Sensitivity parameters",
                                "%s" % vname,
                                "MNAME_global_%s.png" % vname,
                                side   = header[vname],
                                longname = header[vname],
                                legend = False)
-                page.addFigure("Plots by Mole Fraction",
-                               "%s_co2" % vname,
-                               "MNAME_global_%sco2.png" % vname,
-                               side   = header[vname],
-                               legend = False)
                 plt.close()
+                
+            vname = "gain"
+            f1,a1 = plt.subplots(figsize=(6,5),tight_layout=True)
+            for suf,lt in zip(['',' (rad)'],['-','--']):
+                for var,clr in zip(['',],['k']):
+                    pname = "%s%s%s" % (vname,var,suf)
+                    if pname not in vlst: continue
+                    v = Variable(filename=fname,variable_name=pname,groupname="Feedback")
+                    lbl = _pname2lbl(pname)
+                    a1.plot(v.time/365+1850,v.data,lt,color=clr,label=lbl)
+            _formatPlot(a1,"[%s]" % v.unit,vname=vname)
+            f1.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
+            page.addFigure("Sensitivity parameters",
+                           "%s" % vname,
+                           "MNAME_global_%s.png" % vname,
+                           side   = header[vname],
+                           longname = header[vname],
+                           legend = False)
+            plt.close()
             
 if __name__ == "__main__":
 
