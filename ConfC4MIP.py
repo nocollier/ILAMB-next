@@ -9,7 +9,7 @@ import os,glob
 
 matplotlib.rc('font', **{'size':14})
 
-class ConfBetaGamma(Confrontation):
+class ConfC4MIP(Confrontation):
 
     def __init__(self,**kwargs):
 
@@ -316,8 +316,9 @@ if __name__ == "__main__":
     M.append(m)
 
     # initialize the confrontation
-    c = ConfBetaGamma(name = "CarbonCycleFeedback",
-                      output_path = "BetaGamma/")
+    path = "./C4MIP"
+    if not os.path.isdir(path): os.mkdir(path)
+    c = ConfC4MIP(name = "CarbonCycleFeedback",output_path = path)
     for m in M:
         if not os.path.isfile(os.path.join(c.output_path,"CarbonCycleFeedback_%s.nc" % m.name)):
             c.confront(m)
