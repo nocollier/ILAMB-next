@@ -38,7 +38,7 @@ class ConfBetaGamma(Confrontation):
 
     def confront(self,m):
         
-        names = {'1pctCO2':'full','1pctCO2-bgc':'bgc','1pctCO2-rad':'rad'}
+        names = {'1pctCO2':'full','1pctCO2-bgc':'bgc','1pctCO2-rad':'rad','piControl':'ctl'}
 
         # check for the minimum required data
         if               not    m.children: raise ValueError("Model '%s' has no children"      % (m.name))
