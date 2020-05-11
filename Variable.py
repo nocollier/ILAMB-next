@@ -5,6 +5,17 @@ import numpy as np
 """
 
 """
+def _stripConstants(unit):
+    """
+    """
+    T = str(unit).split()
+    out = []
+    for t in T:
+        try:
+            junk = float(t)
+        except:
+            out.append(t)
+    return " ".join(out)
 
 @xr.register_dataarray_accessor('ilamb')
 class ilamb_variable:
@@ -24,7 +35,6 @@ class ilamb_variable:
         src_unit = Unit(self._obj.units)
         tar_unit = Unit(unit)        
         mass_density = Unit("kg m-3")
-        print("(%s) (%s) (%s)" % (src_unit,tar_unit,src_unit/tar_unit),((src_unit/tar_unit)/mass_density).is_dimensionless())        
         if ((src_unit/tar_unit)/mass_density).is_dimensionless():
             self._obj.data /= density
             src_unit /= mass_density
@@ -35,91 +45,89 @@ class ilamb_variable:
         self._obj.attrs['units'] = unit
         return self._obj
 
-    def addMeasure(self,area_filename,fraction_filename=None):
+    def setMeasure(self,area_filename,fraction_filename=None):
+        """
+        - should check sizes
+        """
         with xr.open_dataset(area_filename) as ds:
             measure_name = [v for v in ["areacella","area","areacello"] if v in ds]
             if len(measure_name)==0:
                 msg = "Cannot find ['areacella','area','areacello'] in %s" % area_filename
                 raise ValueError(msg)
             self.measure = ds[measure_name[0]].ilamb.convert("m2")
-            
+        if fraction_filename is None: return
+        with xr.open_dataset(fraction_filename) as ds:
+            frac_name = [v for v in ["sftlf","landfrac","sftof"] if v in ds]
+            if len(frac_name)==0:
+                msg = "Cannot find ['sftlf','landfrac','sftof'] in %s" % fraction_filename
+                raise ValueError(msg)
+            self.fraction = ds[frac_name[0]].ilamb.convert("1")
+            self.measure *= self.fraction
 
-    def integrate_space(self,mean=False):
-
+    def setBounds(self,dset):
+        """
+        - should check sizes and that values fall inside bounds
+        """
+        for d in self._obj.dims:
+            if "bounds" in self._obj[d].attrs:
+                bnd = self._obj[d].attrs["bounds"]
+                if bnd in dset: self.bounds[d] = dset[bnd]
+        
+    def integrateInSpace(self,mean=False):
+        """
+        - need to include regions, and perhaps lat/lon bounds
+        """
         if self.measure is None:
-            msg = "Must call ilamb.add_measure() before you can call ilamb.integrate_space()"
+            msg = "To integrateInSpace you must first add cell areas with setMeasure()"
             raise ValueError(msg)
-
-        # area weighted sum, divided by area if taking a mean
         out = (self._obj*self.measure).sum(self.measure.dims)
-        if mean: out /= self.measure.sum()
-
-        # handle unit shifts, measure assumed in m2 if not given
-        unit  = Unit(self._obj.units)
-        if not mean:
-            unit *= Unit(self.measure.units if "units" in self.measure.attrs else "m2")
-        out.attrs['units'] = str(unit).replace("."," ")
-        out.ilamb.bounds = self.bounds
-        
-        return out
-
-    def integrate_time(self,initial_time=None,final_time=None,mean=False):
-
-        if self.bounds is None:
-            msg = "Must call ilamb.add_bounds() before you can call ilamb.integrate_time()"
-            raise ValueError(msg)
-
-        # do we need to subset?
-        if initial_time is not None or final_time is not None:
-            data = self._obj.loc[initial_time:final_time]
-            dt   = self.bounds.loc[initial_time:final_time]
-            ## look into self.bounds.isel(time=slice(initial_time, final_time))
+        unit = Unit(self._obj.units)
+        out.attrs['units'] = str(unit)
+        if mean:
+            out /= self.measure.sum()
         else:
-            data = self._obj
-            dt = self.bounds
-            
-        # area weighted sum, divided by area if taking a mean
-        out = (data*dt).sum('time')
-        if mean: out /= dt.sum()
-
-        # handle unit shifts, bounds assumed in d if not given
-        unit  = Unit(self._obj.units)
-        if not mean:
-            unit *= Unit(self.bounds.units if "units" in self.bounds.attrs else "d")
-        out.attrs['units'] = str(unit).replace("."," ")
-        out.ilamb.measure = self.measure
-        
+            unit *= Unit("m2")
+            out.attrs['units'] = str(unit)
+            out.ilamb.convert(_stripConstants(unit))
+        for d in out.dims: out.ilamb.bounds[d] = self.bounds[d]
         return out
 
-    def cumsum(self):
-        
-        if self.bounds is None:
-            msg = "Must call ilamb.add_bounds() before you can call ilamb.cumsum()"
+    def integrateInTime(self,mean=False):
+        """
+        - need to add initial/final time
+        """
+        if "time" not in self.bounds:
+            msg = "To integrateInTime you must first add bounds on the time intervals with setBounds()"
             raise ValueError(msg)
-
-        out = (self._obj*self.bounds).cumsum(dim='time')
-        unit  = Unit(self._obj.units)
-        unit *= Unit(self.bounds.units if "units" in self.bounds.attrs else "d")
-        out.attrs['units'] = str(unit).replace("."," ")
-        out.ilamb.measure = self.measure
+        dt = nbp.ilamb.bounds['time'][:,1]-nbp.ilamb.bounds['time'][:,0]
+        dt.data = dt.data.astype(float)*1e-9/86400
+        out = (self._obj*dt).sum(dt.dims)
+        unit = Unit(self._obj.units)
+        out.attrs['units'] = str(unit)
+        if mean:
+            out /= dt.sum()
+        else:
+            unit *= Unit("d")
+            out.attrs['units'] = str(unit)
+            out.ilamb.convert(_stripConstants(unit))
+        for d in out.dims: out.ilamb.bounds[d] = self.bounds[d]
         return out
         
-    def add_bounds(self,dataset):
-        if not ('time' in dataset and 'time' in self._obj.coords): return
-        t0 = dataset['time']
-        t  = self._obj['time']
-        if 'bounds' not in t.attrs: return
-        if t0.size != t.size: return
-        #if not np.allclose(t0,t): return # should check this but it breaks
-        if t.bounds not in dataset: return
-        self.bounds = np.diff(dataset[t.bounds].values,axis=1)
-        self.bounds = xr.DataArray([bnd.total_seconds()/(24*3600) for bnd in self.bounds[:,0]],
-                                   dims = ('time'),
-                                   coords = {'time':t})
-        self.bounds.attrs['units'] = 'd'
+    def accumulateInTime(self):
+        """
+        """
+        if "time" not in self.bounds:
+            msg = "To accumulateInTime you must first add bounds on the time intervals with setBounds()"
+            raise ValueError(msg)
+        dt = nbp.ilamb.bounds['time'][:,1]-nbp.ilamb.bounds['time'][:,0]
+        dt.data = dt.data.astype(float)*1e-9/86400
+        out = (self._obj*dt).cumsum(dt.dims)
+        unit = Unit(self._obj.units)*Unit("d")
+        out.attrs['units'] = str(unit)
+        out.ilamb.convert(_stripConstants(unit))
+        for d in out.dims: out.ilamb.bounds[d] = self.bounds[d]
+        return out                
 
-                
-        
 if __name__ == "__main__":
 
     import os
@@ -137,10 +145,13 @@ if __name__ == "__main__":
     
     ds = xr.open_dataset(nbp_file) # open the nbp
     nbp = ds.nbp                   # pointer to the dataarray
-    nbp.ilamb.addMeasure(areacella_file,sftlf_file)  # give filenames in which we look for measures
-    
-    #mean = nbp.ilamb.integrate_space()
-    #mass = mean.ilamb.cumsum()
-    #mass.ilamb.convert("Pg")
-    #mass.plot()
-    #plt.show()
+    nbp.ilamb.setMeasure(areacella_file,sftlf_file)  # give filenames in which we look for measures
+    nbp.ilamb.setBounds(ds) # harvest the bounds information from the dataset
+    mean = nbp.ilamb.integrateInSpace()
+    acc = mean.ilamb.accumulateInTime()
+    acc.ilamb.convert("Pg")
+    ann = acc.coarsen(time=12,boundary="trim").mean()
+    ann.ilamb.convert("Pg")
+    acc.plot()
+    ann.plot()
+    plt.show()
