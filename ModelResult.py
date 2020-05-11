@@ -111,17 +111,21 @@ class ModelResult():
     
     def findFiles(self,**kwargs):
         """
+        file_paths
         group_regex
         group_attr
         """
-        for root,dirs,files in os.walk(self.path,followlinks=True):
-            for f in files:
-                if not f.endswith(".nc"): continue
-                path = os.path.join(root,f)
-                with Dataset(path) as dset:
-                    for key in dset.variables.keys():
-                        if key not in self.variables: self.variables[key] = []
-                        self.variables[key].append(path)
+        file_paths = kwargs.get("file_paths",[self.path])
+        for file_path in file_paths:
+            if file_path is None: continue
+            for root,dirs,files in os.walk(file_path,followlinks=True):
+                for f in files:
+                    if not f.endswith(".nc"): continue
+                    path = os.path.join(root,f)
+                    with Dataset(path) as dset:
+                        for key in dset.variables.keys():
+                            if key not in self.variables: self.variables[key] = []
+                            self.variables[key].append(path)
 
         # create sub-models automatically in different ways
         group_regex = kwargs.get("group_regex",None)
