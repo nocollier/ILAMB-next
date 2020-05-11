@@ -50,6 +50,14 @@ def SetupModels():
         M.append(m)
     return M
 
+hostname = os.uname()[1]
+
+def CanESM():
+    m = ModelResult("/home/nate/data/ILAMB/MODELS/1pctCO2/CanESM5",name="CanESM5")
+    m.findFiles(group_regex=".*_(.*)_r1i1p1f1*")
+    m.getGridInformation()
+    return m
+    
 def E3SM():
     fc  = ModelResult("/global/cfs/cdirs/m3522/1pctco2_temp/processed/data/1pctco2"   ,name="1pctCO2"    ).findFiles()
     bgc = ModelResult("/global/cfs/cdirs/m3522/1pctco2_temp/processed/data/1pctco2bgc",name="1pctCO2-bgc").findFiles()
