@@ -1,7 +1,8 @@
-from ILAMB.Variable import Variable
+from Variable import ilamb_variable
 from ILAMB import ilamblib as il
 from netCDF4 import Dataset
 from sympy import sympify
+import xarray as xr
 import numpy as np
 import os
 import re
@@ -39,8 +40,7 @@ def MultiModelMean(V):
                     lon  = v0.lon,  lon_bnds  = v0.lon_bnds)
         
 class ModelResult():
-    """
-    
+    """    
     name
     """
     def __init__(self,path,**kwargs):
@@ -65,7 +65,7 @@ class ModelResult():
         self.synonyms = {}
 
         # Areas
-        self.area_atm = self.area_lnd = self.area_ocn = None
+        self.area_atm = self.area_ocn = self.frac_lnd = None
         
     def __str__(self):
         s  = ""
@@ -142,30 +142,28 @@ class ModelResult():
 
     def getGridInformation(self):
         """
-        There are 3 possible grids that we need to account for, 
         """
-
         atm = ocn = lnd = None
         try:
-            atm = self._getVariableChild("areacella",synonyms=["area"]).convert("m2")
+            atm = self._getVariableChild("areacella",synonyms=["area"]).ilamb.convert("m2")
         except:
             pass
         try:
-            ocn = self._getVariableChild("areacello").convert("m2")
+            ocn = self._getVariableChild("areacello").ilamb.convert("m2")
         except:
             pass
         try:
-            lnd = self._getVariableChild("sftlf",synonyms=["landfrac"]).convert("1")
+            lnd = self._getVariableChild("sftlf",synonyms=["landfrac"]).ilamb.convert("1")
         except:
             pass
-        if atm is not None: self.area_atm = atm.data
-        if ocn is not None: self.area_ocn = ocn.data
-        if lnd is not None and atm is not None: self.area_lnd = lnd.data * atm.data
+        if atm is not None: self.area_atm = atm
+        if ocn is not None: self.area_ocn = ocn
+        if lnd is not None: self.frac_lnd = lnd
         for child in self.children: self.children[child].getGridInformation()
         
     def addModel(self,m):
         """
-        m : ModelResult or list of ModelResult
+        m : ILAMB.ModelResult or list of ILAMB.ModelResult
           the model(s) to add as children
         """        
         if type(m) == type(self):
@@ -229,23 +227,23 @@ class ModelResult():
         infinite recursion. This is where we should do all the
         trimming / checking of sites, etc.
         """
-        V = []
-        for f in self.variables[vname]:
-            V.append(Variable(filename=f,variable_name=vname))
-        if len(V) == 0: raise ValueError("No %s file available in %s" % (vname,self.name))
-        v = il.CombineVariables(V)
-        
-        # try to apply the proper areas, otherwise based on lat/lon
-        # with land fraction implicitly 1. TODO: Check CLM h0 output
-        # so we catch the land variables.
-        if v.spatial:
-            if "cell_measures" in v.attr:
-                if "areacello" in v.attr["cell_measures"]: v.area = self.area_ocn
-                if "areacella" in v.attr["cell_measures"]:
-                    v.area = self.area_atm
-                    if "cell_methods" in v.attr:
-                        if "where land" in v.attr["cell_methods"]:
-                            v.area = self.area_lnd
+        V = self.variables[vname]
+        if len(V) == 0:
+            raise ValueError("No %s file available in %s" % (vname,self.name))
+        elif len(V) > 1:
+            dset = xr.concat([xr.open_dataset(f) for f in V],dim="time")
+        else:
+            dset = xr.open_dataset(V[0])
+        v = dset[vname]
+        v.ilamb.setBounds(dset)
+
+        area = frac = None
+        if "cell_measures" in v.attrs and vname not in ["areacella","areacello"]:
+            if "areacella" in v.attrs["cell_measures"]: area = self.area_atm
+            if "areacello" in v.attrs["cell_measures"]: area = self.area_ocn
+            if "cell_methods" in v.attrs:
+                if "where land" in v.attrs["cell_methods"]: frac = self.frac_lnd
+            v.ilamb.setMeasure(area=area,fraction=frac)
         return v
     
     def _getVariableExpression(self,vname,expr,**kwargs):

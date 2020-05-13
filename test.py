@@ -50,8 +50,6 @@ def SetupModels():
         M.append(m)
     return M
 
-hostname = os.uname()[1]
-
 def CanESM():
     m = ModelResult("/home/nate/data/ILAMB/MODELS/1pctCO2/CanESM5",name="CanESM5")
     m.findFiles(group_regex=".*_(.*)_r1i1p1f1*")
@@ -70,8 +68,28 @@ def E3SM():
         sm.variables['tas'] = [f for f in sm.variables['tas'] if "Lmon" not in f]
     return m
 
-M = SetupModels()
+hostname = os.uname()[1]
+M = []
+if "cori"    in hostname: M += SetupModels()
+if "narwhal" in hostname: M += [CanESM(),]
 
+s = '1pctCO2'
+for m in M:
+    print(m.name,"-------------")
+    for n in ['nbp','fgco2']:
+        v = m.getVariable(n)[s]
+        S = v.ilamb.integrateInSpace()
+        S = S.ilamb.integrateInTime(mean=True)
+        S.ilamb.convert("Pg yr-1")
+        print(n,S.data)
+    for n in ['tas']:
+        v = m.getVariable(n)[s]
+        S = v.ilamb.integrateInSpace(mean=True)
+        S = S.ilamb.integrateInTime(mean=True)
+        S.ilamb.convert("degC")
+        print(n,S.data)
+
+    
 """
 path = "./C4MIP"
 if not os.path.isdir(path): os.mkdir(path)
@@ -90,6 +108,4 @@ for m in M:
     if not os.path.isfile(os.path.join(c.output_path,"CarbonCycleFeedback_%s.nc" % m.name)): continue
     c.modelPlots(m)
 c.generateHtml()
-
-
 """

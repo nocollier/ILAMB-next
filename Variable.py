@@ -45,24 +45,30 @@ class ilamb_variable:
         self._obj.attrs['units'] = unit
         return self._obj
 
-    def setMeasure(self,area_filename,fraction_filename=None):
+    def setMeasure(self,area_filename=None,fraction_filename=None,area=None,fraction=None):
         """
         - should check sizes
         """
-        with xr.open_dataset(area_filename) as ds:
-            measure_name = [v for v in ["areacella","area","areacello"] if v in ds]
-            if len(measure_name)==0:
-                msg = "Cannot find ['areacella','area','areacello'] in %s" % area_filename
-                raise ValueError(msg)
-            self.measure = ds[measure_name[0]].ilamb.convert("m2")
-        if fraction_filename is None: return
-        with xr.open_dataset(fraction_filename) as ds:
-            frac_name = [v for v in ["sftlf","landfrac","sftof"] if v in ds]
-            if len(frac_name)==0:
-                msg = "Cannot find ['sftlf','landfrac','sftof'] in %s" % fraction_filename
-                raise ValueError(msg)
-            self.fraction = ds[frac_name[0]].ilamb.convert("1")
-            self.measure *= self.fraction
+        if area is not None:
+            self.measure = area.ilamb.convert("m2")
+        elif area_filename is not None:
+            with xr.open_dataset(area_filename) as ds:
+                measure_name = [v for v in ["areacella","area","areacello"] if v in ds]
+                if len(measure_name)==0:
+                    msg = "Cannot find ['areacella','area','areacello'] in %s" % area_filename
+                    raise ValueError(msg)
+                self.measure = ds[measure_name[0]].ilamb.convert("m2")
+        if fraction is not None:
+            self.fraction = fraction.ilamb.convert("1")
+            self.measure = self.measure*self.fraction
+        elif fraction_filename is not None:
+            with xr.open_dataset(fraction_filename) as ds:
+                frac_name = [v for v in ["sftlf","landfrac","sftof"] if v in ds]
+                if len(frac_name)==0:
+                    msg = "Cannot find ['sftlf','landfrac','sftof'] in %s" % fraction_filename
+                    raise ValueError(msg)
+                self.fraction = ds[frac_name[0]].ilamb.convert("1")
+                self.measure = self.measure*self.fraction
 
     def setBounds(self,dset):
         """
@@ -99,7 +105,7 @@ class ilamb_variable:
         if "time" not in self.bounds:
             msg = "To integrateInTime you must first add bounds on the time intervals with setBounds()"
             raise ValueError(msg)
-        dt = nbp.ilamb.bounds['time'][:,1]-nbp.ilamb.bounds['time'][:,0]
+        dt = self.bounds['time'][:,1]-self.bounds['time'][:,0]
         dt.data = dt.data.astype(float)*1e-9/86400
         out = (self._obj*dt).sum(dt.dims)
         unit = Unit(self._obj.units)
