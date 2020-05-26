@@ -69,7 +69,8 @@ class ilamb_variable:
                     raise ValueError(msg)
                 self.fraction = ds[frac_name[0]].ilamb.convert("1")
                 self.measure = self.measure*self.fraction
-
+        if "type" in self.measure.coords: self.measure = self.measure.drop("type")
+        
     def setBounds(self,dset):
         """
         - should check sizes and that values fall inside bounds
@@ -125,7 +126,7 @@ class ilamb_variable:
         if "time" not in self.bounds:
             msg = "To accumulateInTime you must first add bounds on the time intervals with setBounds()"
             raise ValueError(msg)
-        dt = nbp.ilamb.bounds['time'][:,1]-nbp.ilamb.bounds['time'][:,0]
+        dt = self.bounds['time'][:,1]-self.bounds['time'][:,0]
         dt.data = dt.data.astype(float)*1e-9/86400
         out = (self._obj*dt).cumsum(dt.dims)
         unit = Unit(self._obj.units)*Unit("d")

@@ -1,5 +1,6 @@
 from ILAMB.Confrontation import Confrontation,getVariableList
-from ILAMB.Variable import Variable
+from Variable import ilamb_variable
+import xarray as xr
 import ILAMB.Post as post
 from netCDF4 import Dataset
 import matplotlib.pyplot as plt
@@ -38,117 +39,108 @@ class ConfC4MIP(Confrontation):
 
     def confront(self,m):
         
-        names = {'1pctCO2':'full','1pctCO2-bgc':'bgc','1pctCO2-rad':'rad','piControl':'ctl'}
+        names   = {'1pctCO2':'full','1pctCO2-bgc':'bgc','1pctCO2-rad':'rad','piControl':'ctl'}
+        data    = {}
+        scalars = {}
 
         # check for the minimum required data
         if               not    m.children: raise ValueError("Model '%s' has no children"      % (m.name))
         if '1pctCO2'     not in m.children: raise ValueError("Model '%s' has no '1pctCO2'"     % (m.name))
         if '1pctCO2-bgc' not in m.children: raise ValueError("Model '%s' has no '1pctCO2-bgc'" % (m.name))
         
-        # model nbp
+        # process nbp
         nbp = m.getVariable("nbp")
-        y0,yf = np.round(nbp['1pctCO2'].time_bnds[[0,-1],[0,1]]/365)+1850
-        years = np.asarray([np.arange(y0,yf),np.arange(y0+1,yf+1)]).T
-        intervals = 365*(years-1850)
-        nbp0 = {}
         for key in nbp.keys():
-            nbp [key] = nbp[key].integrateInSpace().accumulateInTime().convert("Pg")
-            nbp0[key] = nbp[key].data[0]
-            nbp [key] = nbp[key].coarsenInTime(intervals)
+            nbp[key] = nbp[key].ilamb.integrateInSpace()
+            nbp[key] = nbp[key].ilamb.accumulateInTime()
+            nbp[key] = nbp[key].ilamb.convert("Pg")
             nbp[key].name = "nbp_%s" % names[key]
-
-        # model fgco2
-        fgco2  = m.getVariable("fgco2")
-        fgco20 = {}
+            
+        # process fgco2
+        fgco2 = m.getVariable("fgco2")
         for key in fgco2.keys():
-            fgco2 [key] = fgco2[key].integrateInSpace().accumulateInTime().convert("Pg")
-            fgco20[key] = fgco2[key].data[0]
-            fgco2 [key] = fgco2[key].coarsenInTime(intervals)
+            fgco2[key] = fgco2[key].ilamb.integrateInSpace()
+            fgco2[key] = fgco2[key].ilamb.accumulateInTime()
+            fgco2[key] = fgco2[key].ilamb.convert("Pg")
             fgco2[key].name = "fgco2_%s" % names[key]
 
-        # model tas
-        tas  = m.getVariable("tas")
-        tas0 = {}
+        # process tas
+        tas = m.getVariable("tas")
         for key in tas.keys():
-            tas [key] = tas[key].integrateInSpace(mean=True)
-            tas0[key] = tas[key].data[0]
-            tas [key] = tas[key].coarsenInTime(intervals)
+            tas[key] = tas[key].ilamb.integrateInSpace(mean=True)
+            tas[key] = tas[key].ilamb.convert("degC")
             tas[key].name = "tas_%s" % names[key]
-            
-        # change in atmospheric carbon [ppm]
-        dA = self.CO2_0*((1+self.rate)**(years[:,1]-y0)-1)
-        
-        # compute changes based on monthly data
+       
+        # compute changes based on monthly data, then coarsen to annual
         dL = {}; dO = {}; dT = {}
-        for key in   nbp: dL[key] =   nbp[key].data - nbp0  [key]
-        for key in fgco2: dO[key] = fgco2[key].data - fgco20[key]
-        for key in   tas: dT[key] =   tas[key].data-  tas0  [key]
+        for key in nbp:
+            dL[key] = (nbp[key]-nbp[key][0]).coarsen(time=12,boundary='trim').mean()
+            dL[key].attrs['units'] = nbp[key].attrs['units']
+            data['nbp_%s' % names[key]] = nbp[key].coarsen(time=12,boundary='trim').mean()
+        for key in fgco2:
+            dO[key] = (fgco2[key]-fgco2[key][0]).coarsen(time=12,boundary='trim').mean()
+            dO[key].attrs['units'] = fgco2[key].attrs['units']
+            data['fgco2_%s' % names[key]] = fgco2[key].coarsen(time=12,boundary='trim').mean()
+        for key in tas:
+            dT[key] = (tas[key]-tas[key][0]).coarsen(time=12,boundary='trim').mean()
+            dT[key].attrs['units'] = tas[key].attrs['units']
+            data['tas_%s' % names[key]] = tas[key].coarsen(time=12,boundary='trim').mean()
 
-        # for reasons not clear to me, I am getting underflow errors
-        # and so we use errstate
-        with np.errstate(all='ignore'):
-
-            # alpha/beta irrespective of presence of rad simulations
-            alpha = dT['1pctCO2']/dA
-            betaL = dL['1pctCO2-bgc']/dA
-            betaO = dO['1pctCO2-bgc']/dA
-
-            # gamma/gain based on the residual = full-bgc simulation
-            gammaL = (dL['1pctCO2']-dL['1pctCO2-bgc'])/(dT['1pctCO2']-dT['1pctCO2-bgc'])
-            gammaO = (dO['1pctCO2']-dO['1pctCO2-bgc'])/(dT['1pctCO2']-dT['1pctCO2-bgc'])            
-            gain   = -alpha*(gammaL+gammaO)/(1+betaL+betaO)
+        # change in atmospheric carbon [ppm]
+        t = np.array([t.total_seconds()/(3600*24*365) for t in dT['1pctCO2'].time.data-dT['1pctCO2'].time.data[0]])+1
+        dA = xr.DataArray(self.CO2_0*((1+self.rate)**t-1),
+                          dims=('time'),
+                          coords={'time':dT['1pctCO2'].time},
+                          attrs={'units':'ppm'},
+                          name="co2")
+        data[dA.name] = dA
+            
+        # alpha/beta irrespective of presence of rad simulations
+        alpha = dT['1pctCO2']/dA
+        betaL = dL['1pctCO2-bgc']/dA
+        betaO = dO['1pctCO2-bgc']/dA
         
-            # gamma/gain based on the rad simulation
-            gammaL_rad = gammaO_rad = gain_rad = None
-            if ('1pctCO2-rad' in dL and '1pctCO2-rad' in dO and '1pctCO2-rad' in dT):
-                gammaL_rad =  dL['1pctCO2-rad']/dT['1pctCO2-rad']
-                gammaO_rad =  dO['1pctCO2-rad']/dT['1pctCO2-rad']
-                gain_rad   = -alpha*(gammaL_rad+gammaO_rad)/(1+betaL+betaO)
-
-        # beta / gamma unstable near beginning so we mask
-        mask  = np.zeros(betaL.size,dtype=int); mask[:25] = 1
-        betaL = np.ma.masked_array(betaL,mask=mask)
-        betaO = np.ma.masked_array(betaO,mask=mask)
-        gammaL = np.ma.masked_array(gammaL,mask=mask)
-        gammaO = np.ma.masked_array(gammaO,mask=mask)
-        gain = np.ma.masked_array(gain,mask=mask)
-        if gammaL_rad is not None:
-            gammaL_rad = np.ma.masked_array(gammaL_rad,mask=mask)
-            gammaO_rad = np.ma.masked_array(gammaO_rad,mask=mask)
-            gain_rad = np.ma.masked_array(gain_rad,mask=mask)
+        # gamma/gain based on the residual = full-bgc simulation
+        gammaL = (dL['1pctCO2']-dL['1pctCO2-bgc'])/(dT['1pctCO2']-dT['1pctCO2-bgc'])
+        gammaO = (dO['1pctCO2']-dO['1pctCO2-bgc'])/(dT['1pctCO2']-dT['1pctCO2-bgc'])            
+        gain   = -alpha*(gammaL+gammaO)/(1+betaL+betaO)
+        data.update({"alpha":alpha,"betaL":betaL,"betaO":betaO,"gammaL":gammaL,"gammaO":gammaO,"gain":gain})
+        scalars.update({"alpha":xr.DataArray(alpha.data[-1],attrs={"units":"K ppm-1"}),
+                        "betaL":xr.DataArray(betaL.data[-1],attrs={"units":"Pg ppm-1"}),
+                        "betaO":xr.DataArray(betaO.data[-1],attrs={"units":"Pg ppm-1"}),
+                        "gammaL (FC-BGC)":xr.DataArray(gammaL.data[-1],attrs={"units":"Pg K-1"}),
+                        "gammaO (FC-BGC)":xr.DataArray(gammaO.data[-1],attrs={"units":"Pg K-1"}),
+                        "gain (FC-BGC)":xr.DataArray(gain.data[-1],attrs={"units":"1"})})
         
-        with Dataset(os.path.join(self.output_path,"%s_%s.nc" % (self.name,m.name)),mode="w") as results:
-            results.setncatts({"name":m.name,"color":m.color,"complete":0})
-            t  = nbp['1pctCO2'].time
-            tb = nbp['1pctCO2'].time_bnds
-
-            # write out annual fluxes/states
-            for key in   nbp:   nbp[key].toNetCDF4(results,group="Feedback")
-            for key in fgco2: fgco2[key].toNetCDF4(results,group="Feedback")
-            for key in   tas:   tas[key].toNetCDF4(results,group="Feedback")
-            Variable(name="co2",unit="ppm",time=t,time_bnds=tb,data=dA+self.CO2_0).toNetCDF4(results,group="Feedback")
-            Variable(name="betaL",unit="Pg ppm-1",time=t,time_bnds=tb,data=betaL).toNetCDF4(results,group="Feedback")
-            Variable(name="betaO",unit="Pg ppm-1",time=t,time_bnds=tb,data=betaO).toNetCDF4(results,group="Feedback")
-            Variable(name="gammaL",unit="Pg K-1",time=t,time_bnds=tb,data=gammaL).toNetCDF4(results,group="Feedback")
-            Variable(name="gammaO",unit="Pg K-1",time=t,time_bnds=tb,data=gammaO).toNetCDF4(results,group="Feedback")
-            Variable(name="gain",unit="Pg K-1",time=t,time_bnds=tb,data=gain).toNetCDF4(results,group="Feedback")
-            if gammaL_rad is not None:
-                Variable(name="gammaL (rad)",unit="Pg K-1",time=t,time_bnds=tb,data=gammaL_rad).toNetCDF4(results,group="Feedback")
-                Variable(name="gammaO (rad)",unit="Pg K-1",time=t,time_bnds=tb,data=gammaO_rad).toNetCDF4(results,group="Feedback")
-                Variable(name="gain (rad)",unit="Pg K-1",time=t,time_bnds=tb,data=gain_rad).toNetCDF4(results,group="Feedback")
-
-            # write out scalars
-            Variable(name="alpha",unit="K ppm-1" ,data=alpha[-1]).toNetCDF4(results,group="Feedback")
-            Variable(name="betaL",unit="Pg ppm-1",data=betaL[-1]).toNetCDF4(results,group="Feedback")
-            Variable(name="betaO",unit="Pg ppm-1",data=betaO[-1]).toNetCDF4(results,group="Feedback")
-            Variable(name="gammaL (FC-BGC)",unit="Pg K-1",data=gammaL[-1]).toNetCDF4(results,group="Feedback")
-            if gammaL_rad is not None: Variable(name="gammaL (RAD)",unit="Pg K-1",data=gammaL_rad[-1]).toNetCDF4(results,group="Feedback")
-            Variable(name="gammaO (FC-BGC)",unit="Pg K-1",data=gammaO[-1]).toNetCDF4(results,group="Feedback")
-            if gammaO_rad is not None: Variable(name="gammaO (RAD)",unit="Pg K-1",data=gammaO_rad[-1]).toNetCDF4(results,group="Feedback")
-            Variable(name="gain (FC-BGC)",unit="1",data=gain[-1]).toNetCDF4(results,group="Feedback")
-            if gain_rad is not None: Variable(name="gain (RAD)",unit="1",data=gain_rad[-1]).toNetCDF4(results,group="Feedback")
-            results.setncattr("complete",1)
-
+        # division of xarrays does not account for units changes
+        alpha.attrs['units'] = "%s / (%s)" % (dT['1pctCO2'].attrs['units'],dA.attrs['units'])
+        betaL.attrs['units'] = "%s / (%s)" % (dL['1pctCO2'].attrs['units'],dA.attrs['units'])
+        betaO.attrs['units'] = "%s / (%s)" % (dO['1pctCO2'].attrs['units'],dA.attrs['units'])
+        gammaL.attrs['units'] = "%s / (%s)" % (dL['1pctCO2'].attrs['units'],dT['1pctCO2'].attrs['units'])
+        gammaO.attrs['units'] = "%s / (%s)" % (dO['1pctCO2'].attrs['units'],dT['1pctCO2'].attrs['units'])
+        gain.attrs['units'] = "1"
+        
+        # gamma/gain based on the rad simulation
+        gammaL_rad = gammaO_rad = gain_rad = None
+        if ('1pctCO2-rad' in dL and '1pctCO2-rad' in dO and '1pctCO2-rad' in dT):
+            gammaL_rad =  dL['1pctCO2-rad']/dT['1pctCO2-rad']
+            gammaO_rad =  dO['1pctCO2-rad']/dT['1pctCO2-rad']
+            gain_rad   = -alpha*(gammaL_rad+gammaO_rad)/(1+betaL+betaO)
+            data.update({"gammaL (rad)":gammaL_rad,"gammaO (rad)":gammaO_rad,"gain (rad)":gain_rad})
+            scalars.update({"gammaL (RAD)":xr.DataArray(gammaL_rad.data[-1],attrs={"units":"Pg K-1"}),
+                            "gammaO (RAD)":xr.DataArray(gammaO_rad.data[-1],attrs={"units":"Pg K-1"}),
+                            "gain (RAD)":xr.DataArray(gain_rad.data[-1],attrs={"units":"1"})})
+            gammaL_rad.attrs['units'] = "%s / (%s)" % (dL['1pctCO2'].attrs['units'],dT['1pctCO2'].attrs['units'])
+            gammaO_rad.attrs['units'] = "%s / (%s)" % (dO['1pctCO2'].attrs['units'],dT['1pctCO2'].attrs['units'])
+            gain_rad.attrs['units'] = "1"
+            
+        # write out data
+        fname = os.path.join(self.output_path,"%s_%s.nc" % (self.name,m.name))
+        with Dataset(fname,mode="w") as dset: dset.setncatts({"name":m.name,"color":m.color,"complete":0})
+        xr.Dataset(   data).to_netcdf(path=fname,group="Feedback"        ,mode="a")
+        xr.Dataset(scalars).to_netcdf(path=fname,group="Feedback/scalars",mode="a")
+        with Dataset(fname,mode="r+") as dset: dset.setncatts({"complete":1})
+        
     def determinePlotLimits(self):
 
         def _update(thing,data,limits):
@@ -182,6 +174,7 @@ class ConfC4MIP(Confrontation):
         
     def modelPlots(self,m):
         def _formatPlot(ax,yl,xl=None,vname=None):
+            ax.set_title("")
             if xl: ax.set_xlabel(xl)
             ax.set_ylabel(yl)
             h,l = ax.get_legend_handles_labels()
@@ -214,16 +207,16 @@ class ConfC4MIP(Confrontation):
         with Dataset(fname) as dset:
             grp  = dset.groups["Feedback"]
             vlst = getVariableList(grp)
-            co2 = Variable(filename=fname,variable_name="co2"     ,groupname="Feedback")
-            tas = Variable(filename=fname,variable_name="tas_full",groupname="Feedback")
+            co2 = xr.open_dataset(fname,group="Feedback")["co2"]
+            tas = xr.open_dataset(fname,group="Feedback")["tas_full"]
             for vname in ['nbp','fgco2','tas']:
                 f1,a1 = plt.subplots(figsize=(6,5),tight_layout=True)
                 for var,clr in zip(['full','bgc','rad'],['b','g','r']):
                     pname = "%s_%s" % (vname,var)
                     if pname not in vlst: continue
-                    v = Variable(filename=fname,variable_name=pname,groupname="Feedback")
-                    a1.plot(v.time/365+1850,v.data,'-',color=clr,label=var.replace("full","FC").upper())
-                _formatPlot(a1,"[%s]" % v.unit,vname=vname)
+                    v = xr.open_dataset(fname,group="Feedback")[pname]
+                    v.plot(ax=a1,color=clr,label=var.replace("full","FC").upper())
+                _formatPlot(a1,"[%s]" % v.units,vname=vname)
                 f1.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
                 page.addFigure("Global states and fluxes",
                                "%s" % vname,
@@ -240,10 +233,10 @@ class ConfC4MIP(Confrontation):
                                    [np.asarray([95,184,104])/255,np.asarray([51,175,255])/255]):
                     pname = "%s%s%s" % (vname,var,suf)
                     if pname not in vlst: continue
-                    v = Variable(filename=fname,variable_name=pname,groupname="Feedback")
+                    v = xr.open_dataset(fname,group="Feedback")[pname]
                     lbl = _pname2lbl(pname)
-                    a2.plot(co2.data,v.data,lt,color=clr,label=lbl)
-                _formatPlot(a2,"[%s]" % v.unit,xl="[%s]" % co2.unit,vname=vname)
+                    v.plot(ax=a2,linestyle=lt,color=clr,label=lbl)
+                _formatPlot(a2,"[%s]" % v.units,xl="[%s]" % co2.units,vname=vname)
                 f2.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
                 page.addFigure("Sensitivity parameters",
                                "%s" % vname,
@@ -305,11 +298,11 @@ if __name__ == "__main__":
     M.append(m)
 
     # second model we will remove the rad runs
-    m = ModelResult("/home/nate/data/ILAMB/MODELS/1pctCO2/CanESM5",name="CanESM5r")
-    m.findFiles(group_attr="experiment_id") # <-- equivalent way of defining groups
-    del m.children['1pctCO2-rad']
-    m.getGridInformation()
-    M.append(m)
+    #m = ModelResult("/home/nate/data/ILAMB/MODELS/1pctCO2/CanESM5",name="CanESM5r")
+    #m.findFiles(group_attr="experiment_id") # <-- equivalent way of defining groups
+    #del m.children['1pctCO2-rad']
+    #m.getGridInformation()
+    #M.append(m)
 
     # initialize the confrontation
     path = "./C4MIP"

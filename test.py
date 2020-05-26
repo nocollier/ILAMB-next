@@ -73,6 +73,12 @@ M = []
 if "cori"    in hostname: M += SetupModels()
 if "narwhal" in hostname: M += [CanESM(),]
 
+m = M[0].children['1pctCO2']
+v = m.getVariable('nbp')
+
+
+
+"""
 s = '1pctCO2'
 for m in M:
     print(m.name,"-------------")
@@ -88,7 +94,7 @@ for m in M:
         S = S.ilamb.integrateInTime(mean=True)
         S.ilamb.convert("degC")
         print(n,S.data)
-
+"""
     
 """
 path = "./C4MIP"
