@@ -104,6 +104,13 @@ class ConfC4MIP(Confrontation):
         gammaL = (dL['1pctCO2']-dL['1pctCO2-bgc'])/(dT['1pctCO2']-dT['1pctCO2-bgc'])
         gammaO = (dO['1pctCO2']-dO['1pctCO2-bgc'])/(dT['1pctCO2']-dT['1pctCO2-bgc'])            
         gain   = -alpha*(gammaL+gammaO)/(1+betaL+betaO)
+
+        # beginning of gamma/gain is unstable, skip
+        skip = 20
+        gammaL[:skip] = np.nan
+        gammaO[:skip] = np.nan
+        gain  [:skip] = np.nan
+        
         data.update({"alpha":alpha,"betaL":betaL,"betaO":betaO,"gammaL":gammaL,"gammaO":gammaO,"gain":gain})
         scalars.update({"alpha":xr.DataArray(alpha.data[-1],attrs={"units":"K ppm-1"}),
                         "betaL":xr.DataArray(betaL.data[-1],attrs={"units":"Pg ppm-1"}),
@@ -133,6 +140,11 @@ class ConfC4MIP(Confrontation):
             gammaL_rad.attrs['units'] = "%s / (%s)" % (dL['1pctCO2'].attrs['units'],dT['1pctCO2'].attrs['units'])
             gammaO_rad.attrs['units'] = "%s / (%s)" % (dO['1pctCO2'].attrs['units'],dT['1pctCO2'].attrs['units'])
             gain_rad.attrs['units'] = "1"
+
+            # beginning of gamma/gain is unstable, skip
+            gammaL_rad[:skip] = np.nan
+            gammaO_rad[:skip] = np.nan
+            gain_rad  [:skip] = np.nan
             
         # write out data
         fname = os.path.join(self.output_path,"%s_%s.nc" % (self.name,m.name))
@@ -235,7 +247,7 @@ class ConfC4MIP(Confrontation):
                     if pname not in vlst: continue
                     v = xr.open_dataset(fname,group="Feedback")[pname]
                     lbl = _pname2lbl(pname)
-                    v.plot(ax=a2,linestyle=lt,color=clr,label=lbl)
+                    a2.plot(co2-co2[0],v,lt,color=clr,label=lbl)
                 _formatPlot(a2,"[%s]" % v.units,xl="[%s]" % co2.units,vname=vname)
                 f2.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
                 page.addFigure("Sensitivity parameters",
@@ -252,11 +264,11 @@ class ConfC4MIP(Confrontation):
                 for var,clr in zip(['L','O'],
                                    [np.asarray([95,184,104])/255,np.asarray([51,175,255])/255]):
                     pname = "%s%s%s" % (vname,var,suf)
-                    if pname not in vlst: continue
-                    v = Variable(filename=fname,variable_name=pname,groupname="Feedback")
+                    if pname not in vlst: continue                    
+                    v = xr.open_dataset(fname,group="Feedback")[pname]
                     lbl = _pname2lbl(pname)
-                    a2.plot(tas.data-tas.data[0],v.data,lt,color=clr,label=lbl)
-                _formatPlot(a2,"[%s]" % v.unit,xl="[%s]" % tas.unit,vname=vname)
+                    a2.plot(tas-tas[0],v,lt,color=clr,label=lbl)
+                _formatPlot(a2,"[%s]" % v.attrs['units'],xl="[%s]" % tas.attrs['units'],vname=vname)
                 f2.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
                 page.addFigure("Sensitivity parameters",
                                "%s" % vname,
@@ -271,11 +283,11 @@ class ConfC4MIP(Confrontation):
             for suf,lt in zip(['',' (rad)'],['-','--']):
                 for var,clr in zip(['',],['k']):
                     pname = "%s%s%s" % (vname,var,suf)
-                    if pname not in vlst: continue
-                    v = Variable(filename=fname,variable_name=pname,groupname="Feedback")
+                    if pname not in vlst: continue                    
+                    v = xr.open_dataset(fname,group="Feedback")[pname]
                     lbl = _pname2lbl(pname)
-                    a1.plot(v.time/365+1850,v.data,lt,color=clr,label=lbl)
-            _formatPlot(a1,"[%s]" % v.unit,vname=vname)
+                    v.plot(ax=a1,linestyle=lt,color=clr,label=lbl)
+            _formatPlot(a1,"[%s]" % v.attrs['units'],vname=vname)
             f1.savefig(os.path.join(self.output_path,"%s_global_%s.png" % (m.name,vname)))
             page.addFigure("Sensitivity parameters",
                            "%s" % vname,
