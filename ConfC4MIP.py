@@ -156,8 +156,10 @@ class ConfC4MIP(Confrontation):
     def determinePlotLimits(self):
 
         def _update(thing,data,limits):
-            limits[thing]["min"] = min(limits[thing]["min"],d.min())
-            limits[thing]["max"] = max(limits[thing]["max"],d.max())
+            d = np.ma.masked_invalid(data)
+            p = np.percentile(d.compressed(),[2,98])
+            limits[thing]["min"] = min(limits[thing]["min"],p[0])
+            limits[thing]["max"] = max(limits[thing]["max"],p[1])
             return limits
         
         # initialize limits
@@ -309,13 +311,7 @@ if __name__ == "__main__":
     m.getGridInformation()
     M.append(m)
 
-    # second model we will remove the rad runs
-    #m = ModelResult("/home/nate/data/ILAMB/MODELS/1pctCO2/CanESM5",name="CanESM5r")
-    #m.findFiles(group_attr="experiment_id") # <-- equivalent way of defining groups
-    #del m.children['1pctCO2-rad']
-    #m.getGridInformation()
-    #M.append(m)
-
+    """
     # initialize the confrontation
     path = "./C4MIP"
     if not os.path.isdir(path): os.mkdir(path)
@@ -326,5 +322,5 @@ if __name__ == "__main__":
     c.determinePlotLimits()
     for m in M: c.modelPlots(m)
     c.generateHtml()
-
+    """
 
