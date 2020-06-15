@@ -69,7 +69,6 @@ class ilamb_variable:
                     raise ValueError(msg)
                 self.fraction = ds[frac_name[0]].ilamb.convert("1")
                 self.measure = self.measure*self.fraction
-        if "type" in self.measure.coords: self.measure = self.measure.drop("type")
         
     def setBounds(self,dset):
         """
@@ -87,7 +86,9 @@ class ilamb_variable:
         if self.measure is None:
             msg = "To integrateInSpace you must first add cell areas with setMeasure()"
             raise ValueError(msg)
-        out = (self._obj*self.measure).sum(self.measure.dims)
+
+        V,A = xr.align(self._obj,self.measure,join='override',copy=False)
+        out = (V*A).sum(A.dims)
         unit = Unit(self._obj.units)
         out.attrs['units'] = str(unit)
         if mean:
