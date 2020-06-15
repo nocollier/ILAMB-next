@@ -146,15 +146,15 @@ class ModelResult():
         atm = ocn = lnd = None
         try:
             atm = self._getVariableChild("areacella",synonyms=["area"]).ilamb.convert("m2")
-        except:
+        except Exception as e:
             pass
         try:
             ocn = self._getVariableChild("areacello").ilamb.convert("m2")
-        except:
+        except Exception as e:
             pass
         try:
             lnd = self._getVariableChild("sftlf",synonyms=["landfrac"]).ilamb.convert("1")
-        except:
+        except Exception as e:
             pass
         if atm is not None: self.area_atm = atm
         if ocn is not None: self.area_ocn = ocn
@@ -227,7 +227,7 @@ class ModelResult():
         infinite recursion. This is where we should do all the
         trimming / checking of sites, etc.
         """
-        V = self.variables[vname]
+        V = sorted(self.variables[vname])
         if len(V) == 0:
             raise ValueError("No %s file available in %s" % (vname,self.name))
         elif len(V) > 1:
