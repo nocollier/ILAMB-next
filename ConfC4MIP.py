@@ -87,7 +87,7 @@ class ConfC4MIP(Confrontation):
             data['tas_%s' % names[key]] = tas[key].coarsen(time=12,boundary='trim').mean()
 
         # change in atmospheric carbon [ppm]
-        t = np.array([t.total_seconds()/(3600*24*365) for t in dT['1pctCO2'].time.data-dT['1pctCO2'].time.data[0]])+1
+        t = (dT['1pctCO2'].time-dT['1pctCO2'].time[0]).data.astype(float)*1e-9/3600/24/365
         dA = xr.DataArray(self.CO2_0*((1+self.rate)**t-1),
                           dims=('time'),
                           coords={'time':dT['1pctCO2'].time},
