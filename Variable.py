@@ -6,7 +6,8 @@ import numpy as np
 
 """
 def _stripConstants(unit):
-    """
+    """Sometimes cf_units gives us units with strange constants in front,
+    remove any token purely numeric.
     """
     T = str(unit).split()
     out = []
@@ -24,10 +25,17 @@ class ilamb_variable:
         self.measure = None
         self.fraction = None
         self.bounds = {}
+
+    def timeScale(self):
+        """Returns mean time scale of the data.
+        """
+        dt = self._obj.time.diff('time').mean()
+        return dt.data.astype(float)*1e-9/86400
         
-    def convert(self,unit,density=998.2):
+    def convert(self,unit,density=998.2,molar_mass=12.011):
         """
         - handles ( M L-2 T-1 ) --> ( L T-1 )
+        - handles (       mol ) --> (     M )
         """
         if 'units' not in self._obj.attrs:
             msg = "Cannot convert the units of a DataArray lacking the 'units' attribute"
@@ -35,12 +43,19 @@ class ilamb_variable:
         src_unit = Unit(self._obj.units)
         tar_unit = Unit(unit)        
         mass_density = Unit("kg m-3")
+        molar_density = Unit("g mol-1")
         if ((src_unit/tar_unit)/mass_density).is_dimensionless():
             self._obj.data /= density
             src_unit /= mass_density
         elif ((tar_unit/src_unit)/mass_density).is_dimensionless():
             self._obj.data *= density
             src_unit *= mass_density
+        if ((src_unit/tar_unit)/molar_density).is_dimensionless():
+            self._obj.data /= molar_mass
+            src_unit /= molar_density
+        elif ((tar_unit/src_unit)/molar_density).is_dimensionless():
+            self._obj.data *= molar_mass
+            src_unit *= molar_density
         src_unit.convert(self._obj.data,tar_unit,inplace=True)
         self._obj.attrs['units'] = unit
         return self._obj

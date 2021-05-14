@@ -23,7 +23,7 @@ def MultiModelMean(V):
             data       =  V[a].data.data
             count      = (V[a].data.mask==False)
             data[count==False] = 0
-            data_sum  += data     
+            data_sum  += data
             data_sum2 += data*data
             data_cnt  += count
         mean = data_sum  / data_cnt.clip(1)
@@ -38,23 +38,23 @@ def MultiModelMean(V):
                     time = v0.time, time_bnds = v0.time_bnds,
                     lat  = v0.lat,  lat_bnds  = v0.lat_bnds,
                     lon  = v0.lon,  lon_bnds  = v0.lon_bnds)
-        
+
 class ModelResult():
-    """    
+    """
     name
     """
     def __init__(self,path,**kwargs):
-        
+
         #
         self.name = kwargs.get("name","model")
         self.color = (0,0,0)
-        
+
         # A 'model' could be a collection of results, as in an
         # ensemble or a MIP. The collection of results could also be a
         # perturbation study.
         self.parent = None
         self.children = {}
-        
+
         # What is the top level directory where files are located?
         self.path = path
 
@@ -66,11 +66,11 @@ class ModelResult():
 
         # Areas
         self.area_atm = self.area_ocn = self.frac_lnd = None
-        
+
     def __str__(self):
         s  = ""
         s += "ModelResult: %s\n" % self.name
-        s += "-"*(len(self.name)+13) + "\n"        
+        s += "-"*(len(self.name)+13) + "\n"
         for child in self.children:
             s += "  + %s\n" % (child)
         return s
@@ -91,7 +91,7 @@ class ModelResult():
                     to_remove.append(f)
             for r in to_remove: self.variables[v].remove(r) # get rid of those we passed to models
         return groups
-    
+
     def _byAttr(self,group_attr):
         """
         """
@@ -101,14 +101,14 @@ class ModelResult():
             for f in self.variables[v]:
                 with Dataset(f) as dset:
                     if group_attr in dset.ncattrs():
-                        g = dset.getncattr(group_attr)                        
+                        g = dset.getncattr(group_attr)
                         if g not in groups: groups[g] = {}
                         if v not in groups[g]: groups[g][v] = []
                         groups[g][v].append(f)
                         to_remove.append(f)
             for r in to_remove: self.variables[v].remove(r) # get rid of those we passed to models
         return groups
-    
+
     def findFiles(self,**kwargs):
         """
         file_paths
@@ -132,12 +132,12 @@ class ModelResult():
         group_attr  = kwargs.get("group_attr" ,None)
         groups      = {}
         if not groups and group_regex is not None: groups = self._byRegex(group_regex)
-        if not groups and group_attr  is not None: groups = self._byAttr (group_attr )           
+        if not groups and group_attr  is not None: groups = self._byAttr (group_attr )
         for g in groups:
             m = ModelResult(self.path,name=g)
             m.variables = groups[g]
             m.parent = self
-            self.children[m.name] = m 
+            self.children[m.name] = m
         return self
 
     def getGridInformation(self):
@@ -160,12 +160,12 @@ class ModelResult():
         if ocn is not None: self.area_ocn = ocn
         if lnd is not None: self.frac_lnd = lnd
         for child in self.children: self.children[child].getGridInformation()
-        
+
     def addModel(self,m):
         """
         m : ILAMB.ModelResult or list of ILAMB.ModelResult
           the model(s) to add as children
-        """        
+        """
         if type(m) == type(self):
             if m.name not in self.children:
                 self.children[m.name] = m
@@ -179,7 +179,7 @@ class ModelResult():
 
     def addSynonym(self,expr):
         """
-        
+
         """
         assert type(expr) == type("")
         if expr.count("=") != 1: raise ValueError("Add a synonym by providing a string of the form 'a = b + c'")
@@ -189,7 +189,7 @@ class ModelResult():
         for arg in sympify(expr).free_symbols:
             assert arg.name in self.variables
         self.synonyms[key].append(expr)
-        
+
     def getVariable(self,vname,**kwargs):
         """
         synonyms
@@ -204,7 +204,7 @@ class ModelResult():
             vmean = MultiModelMean(v)
             return v,vmean
         return v
-    
+
     def _getVariableChild(self,vname,**kwargs):
         """
         synonymns
@@ -213,7 +213,7 @@ class ModelResult():
         # prescendence. But we may need to look for they using the
         # synonyms provided in the 'getVariable' call.
         synonyms = kwargs.get("synonyms",[])
-        if type(synonyms) != type([]): synonyms = [synonyms]        
+        if type(synonyms) != type([]): synonyms = [synonyms]
         synonyms = [vname,] + synonyms
         Ss = [s for s in synonyms if s in self.synonyms ]
         Vs = [s for s in synonyms if s in self.variables]
@@ -235,8 +235,15 @@ class ModelResult():
         else:
             dset = xr.open_dataset(V[0])
         v = dset[vname]
-        v.ilamb.setBounds(dset)
 
+        latlon = kwargs.get("latlon",None)
+        if latlon is not None:
+            lat,lon = latlon
+            if v.lon.data.max() > 180:
+                if lon < 0: lon += 360
+            v = v.sel(lat=lat,lon=lon,method='nearest')
+            
+        v.ilamb.setBounds(dset)
         area = frac = None
         if "cell_measures" in v.attrs and vname not in ["areacella","areacello"]:
             if "areacella" in v.attrs["cell_measures"]: area = self.area_atm
@@ -245,7 +252,7 @@ class ModelResult():
                 if "where land" in v.attrs["cell_methods"]: frac = self.frac_lnd
             v.ilamb.setMeasure(area=area,fraction=frac)
         return v
-    
+
     def _getVariableExpression(self,vname,expr,**kwargs):
         """
         """
