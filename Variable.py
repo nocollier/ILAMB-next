@@ -8,30 +8,42 @@ from matplotlib.tri import Triangulation
 from scipy.interpolate import NearestNDInterpolator
 from Regions import Regions
 
+def _stripConstants(unit):
+    """Sometimes cf_units gives us units with strange constants in front,
+    remove any token which is purely numeric."""
+    T = str(unit).split()
+    out = []
+    for t in T:
+        try:
+            junk = float(t)
+        except:
+            out.append(t)
+    return " ".join(out)
+        
 class Variable():
 
     def __init__(self,**kwargs):
 
         self.filename = kwargs.get("filename",None)
         self.varname = kwargs.get("varname",None)
+        
         self.ds = kwargs.get("ds",None)
         self.da = kwargs.get("da",None)
+
+
+        
+
+
+        
         self.dx = kwargs.get("dx",None)  # the area of the cells [m2]
         self.dt = kwargs.get("dt",None)  # the length of the time intervals [d]
         t0 = kwargs.get("t0",None)
         tf = kwargs.get("tf",None)
 
-        # These methods do not read memory, the dataset is left
-        # unchanged in case we need something out of it, the dataarray
-        # is what we will operate on moving forward.
         if self.filename is not None:
             self.ds = xr.open_dataset(self.filename)
             self.da = self.ds[self.varname]
-
-            # To prevent more memory being read than intended, trim away
-            # times we don't need if specified
-            if 'time' in self.da.dims:
-                self.da = self.da.sel(time=slice(t0,tf))
+            if 'time' in self.da.dims: self.da = self.da.sel(time=slice(t0,tf))
 
         # Consistency check on times
         if self.dt is not None and (t0 is not None or tf is not None): self.dt = self.dt.sel(time=slice(t0,tf))
@@ -54,8 +66,8 @@ class Variable():
         if self.lat_name and self.lon_name:
             if (np.issubdtype(self.da[self.lat_name].dtype,np.integer) and
                 np.issubdtype(self.da[self.lon_name].dtype,np.integer)):
-                self.is_regular = False
-        
+                self.is_regular = False            
+                
     def __str__(self):
         out  = self.da.__str__()
         out += "\nStatistics:"
@@ -64,23 +76,30 @@ class Variable():
         out += "\n    {0:<16}{1:.6e}".format("maximum:",self.da.max().data)
         return out
 
+    def timeBounds(self):
+        """
+        """
+        if "time" not in self.da.dims: return None
+        t = self.da["time"]
+        if 'bounds' in t.attrs and self.ds is not None:
+            if t.attrs['bounds'] in self.ds:
+                t = self.ds[t.attrs['bounds']]
+        return t.min(),t.max()
+
+    def nestSpatialGrids(self,v):
+        """
+        """
+        self.da[self.lon_name] = (self.da[self.lon_name] + 180) % 360 - 180
+        v   .da[v   .lon_name] = (v   .da[v   .lon_name] + 180) % 360 - 180
+        lat = np.union1d(self.da[self.lat_name],v.da[v.lat_name])
+        lon = np.union1d(self.da[self.lon_name],v.da[v.lon_name])
+        return self.interpolate(lat=lat,lon=lon),v.interpolate(lat=lat,lon=lon)
+        
     def convert(self,unit,density=998.2,molar_mass=12.011):
         """Using cf_units (UDUNITS2) convert the unit in place
         - handles ( M L-2 T-1 ) --> ( L T-1 ), assuming water
         - handles (       mol ) --> (     M ), assuming carbon
         """
-        def _stripConstants(unit):
-            """Sometimes cf_units gives us units with strange constants in front,
-            remove any token which is purely numeric.
-            """
-            T = str(unit).split()
-            out = []
-            for t in T:
-                try:
-                    junk = float(t)
-                except:
-                    out.append(t)
-            return " ".join(out)
         if 'units' not in self.da.attrs:
             msg = "Cannot convert the units of the DataArray lacking the 'units' attribute"
             raise ValueError(msg)
@@ -159,8 +178,8 @@ class Variable():
                 yb = np.sin(yb*np.pi/180)
                 dx = earth_rad*np.diff(xb,axis=1).squeeze()
                 dy = earth_rad*np.diff(yb,axis=1).squeeze()
-                dx = xr.DataArray(data=dx,dims={self.lon_name:self.da[self.lon_name]})
-                dy = xr.DataArray(data=dy,dims={self.lat_name:self.da[self.lat_name]})
+                dx = xr.DataArray(data=np.abs(dx),dims=[self.lon_name],coords={self.lon_name:self.da[self.lon_name]})
+                dy = xr.DataArray(data=np.abs(dy),dims=[self.lat_name],coords={self.lat_name:self.da[self.lat_name]})
                 ms = dy*dx
             else:
                 msg = "Not implemented"
@@ -212,7 +231,10 @@ class Variable():
             if dims: mask = mask.all(dims)
             out /= (dx*(mask==False)).sum()
         else:
-            units *= Unit('m2')
+            if 'm-2' in str(units):
+                units = str(units).replace("m-2","")
+            else:
+                units *= Unit('m2')
             out.attrs['units'] = str(units)
             v.convert(_stripConstants(units))
         return v
@@ -260,6 +282,7 @@ class Variable():
     def interpolate(self,lat=None,lon=None,res=None,**kwargs):
         """
         """
+        method = kwargs.get("method","nearest")
         if not self.is_regular: return self._interpolateIrregular(res)
         if res is not None:
             lat = self.da[self.lat_name]
@@ -268,7 +291,8 @@ class Variable():
             lon = np.linspace(lon.min(),lon.max(),int((lon.max()-lon.min())/res)+1)
         assert lat is not None
         assert lon is not None
-        out = Variable(ds=self.ds,da=self.da.interp(coords={self.lat_name:lat,self.lon_name:lon}))
+        out = Variable(ds=self.ds,da=self.da.interp(coords={self.lat_name:lat,self.lon_name:lon},
+                                                    method=method))
         out.da.attrs = dict(self.da.attrs)
         for skip in ["cell_measures","cell_methods"]:
             if skip in out.da.attrs: out.da.attrs.pop(skip)
@@ -283,8 +307,8 @@ class Variable():
             self.da.plot(**kwargs)
         elif self.da.ndim == 2:
             fig,ax = plt.subplots(dpi=200,subplot_kw={'projection':ccrs.Robinson()})
-            da = self.da
-            if self.dx is not None: da = xr.where(self.dx<1,np.nan,self.da)
+            da = self.da.sortby(self.lon_name)
+            if self.dx is not None: da = xr.where(self.dx<1,np.nan,da)
             p = da.plot(ax=ax,transform=ccrs.PlateCarree(),**kwargs)
             ax.add_feature(cfeature.NaturalEarthFeature('physical','land','110m',
                                                         edgecolor='face',
@@ -299,7 +323,27 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     import os
 
+
     if 1:
+        rname = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc"
+        r = Variable(filename = rname, varname = "gpp").convert("g m-2 d-1")
+        t0,tf = r.timeBounds()
+        
+        root =  "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/"
+        cname = os.path.join(root,"gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc")
+        dx_atm = Variable(filename = os.path.join(root,"areacella_fx_CanESM5_historical_r1i1p1f1_gn.nc"),
+                          varname = "areacella").convert("m2").da
+        dx_lnd = Variable(filename = os.path.join(root,"sftlf_fx_CanESM5_historical_r1i1p1f1_gn.nc"),
+                          varname = "sftlf").convert("1").da * dx_atm
+        c = Variable(filename = cname, varname = "gpp", t0 = t0, tf = tf).convert("g m-2 d-1")
+        R,C = r.nestSpatialGrids(c)
+
+        for v in [r,R,c,C]:
+            #print(v,"\n---------------")
+            print(v.integrateInSpace().integrateInTime(mean=True).convert("Pg yr-1"),"\n---------------")
+
+        
+    if 0:
         root = os.path.join(os.environ['ILAMB_ROOT'],'MODELS/CMIP6/CESM2')
         dx = Variable(filename = os.path.join(root,"areacella_fx_CESM2_historical_r1i1p1f1_gn.nc"),
                       varname = "areacella").convert("m2")
@@ -321,7 +365,7 @@ if __name__ == "__main__":
         print(v.integrateInTime(mean=True).integrateInSpace(mean=True))
 
     
-    if 1:
+    if 0:
         root = "./DATA/CanESM5"
         dx_atm = Variable(filename = os.path.join(root,"areacella_fx_CanESM5_1pctCO2_r1i1p1f1_gn.nc"),
                           varname = "areacella").convert("m2").da
@@ -343,3 +387,7 @@ if __name__ == "__main__":
                 u = v.interpolate()
                 print(u.integrateInTime(mean=True).integrateInSpace(mean=True))
 
+"""
+* if 'actual_range' is a attribute, then we should update it when data is operated on
+* should accept measures and fraction, and store the fractions, interpolation will need them, 
+"""
