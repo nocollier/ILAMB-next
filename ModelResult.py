@@ -1,43 +1,9 @@
-from Variable import ilamb_variable
-from ILAMB import ilamblib as il
-from netCDF4 import Dataset
+from Variable import Variable
 from sympy import sympify
 import xarray as xr
 import numpy as np
 import os
 import re
-
-def MultiModelMean(V):
-    models = list(V.keys())
-    # make sure all variables are comparable to each other
-    v0 = V[models[0]]
-    for a in models:
-        for b in models:
-            V[a],V[b] = il.MakeComparable(V[a],V[b])
-    # naive mean when everything is the same shape
-    data_sum  = np.zeros(V[models[0]].data.shape)
-    data_sum2 = np.zeros(V[models[0]].data.shape)
-    data_cnt  = np.zeros(V[models[0]].data.shape,dtype=int)
-    with np.errstate(all='ignore'):
-        for a in models:
-            data       =  V[a].data.data
-            count      = (V[a].data.mask==False)
-            data[count==False] = 0
-            data_sum  += data
-            data_sum2 += data*data
-            data_cnt  += count
-        mean = data_sum  / data_cnt.clip(1)
-        std  = np.sqrt((data_sum2 / data_cnt.clip(1) - mean*mean).clip(0))
-    mean = np.ma.masked_array(mean,mask=(data_cnt==0))
-    bnd = np.ma.masked_array(np.zeros(mean.shape + (2,)))
-    bnd[...,0] = mean-std
-    bnd[...,1] = mean+std
-    return Variable(name = v0.name,
-                    unit = v0.unit,
-                    data = mean,    data_bnds = bnd,
-                    time = v0.time, time_bnds = v0.time_bnds,
-                    lat  = v0.lat,  lat_bnds  = v0.lat_bnds,
-                    lon  = v0.lon,  lon_bnds  = v0.lon_bnds)
 
 class ModelResult():
     """
@@ -45,7 +11,7 @@ class ModelResult():
     """
     def __init__(self,path,**kwargs):
 
-        #
+        # 
         self.name = kwargs.get("name","model")
         self.color = (0,0,0)
 
@@ -71,8 +37,12 @@ class ModelResult():
         s  = ""
         s += "ModelResult: %s\n" % self.name
         s += "-"*(len(self.name)+13) + "\n"
-        for child in self.children:
-            s += "  + %s\n" % (child)
+        if self.children:
+            for child in self.children:
+                s += "  + %s\n" % (child)
+        else:
+            for v in sorted(self.variables,key=lambda k: k.lower()):
+                s += "  + %s\n" % (v)                
         return s
 
     def _byRegex(self,group_regex):
@@ -122,7 +92,7 @@ class ModelResult():
                 for f in files:
                     if not f.endswith(".nc"): continue
                     path = os.path.join(root,f)
-                    with Dataset(path) as dset:
+                    with xr.open_dataset(path) as dset:
                         for key in dset.variables.keys():
                             if key not in self.variables: self.variables[key] = []
                             self.variables[key].append(path)
@@ -145,15 +115,18 @@ class ModelResult():
         """
         atm = ocn = lnd = None
         try:
-            atm = self._getVariableChild("areacella",synonyms=["area"]).ilamb.convert("m2")
+            atm = self._getVariableChild("areacella",synonyms=["area"]).convert("m2")
+            atm = atm.ds[atm.varname]
         except Exception as e:
             pass
         try:
-            ocn = self._getVariableChild("areacello").ilamb.convert("m2")
+            ocn = self._getVariableChild("areacello").convert("m2")
+            ocn = ocn.ds[ocn.varname]
         except Exception as e:
             pass
         try:
-            lnd = self._getVariableChild("sftlf",synonyms=["landfrac"]).ilamb.convert("1")
+            lnd = self._getVariableChild("sftlf",synonyms=["landfrac"]).convert("1")
+            lnd = lnd.ds[lnd.varname]
         except Exception as e:
             pass
         if atm is not None: self.area_atm = atm
@@ -231,26 +204,33 @@ class ModelResult():
         if len(V) == 0:
             raise ValueError("No %s file available in %s" % (vname,self.name))
         elif len(V) > 1:
-            dset = xr.concat([xr.open_dataset(f) for f in V],dim="time")
+            raise ValueError("Variable does not support multifile datasets")
         else:
             dset = xr.open_dataset(V[0])
         v = dset[vname]
-
+            
+        # Scan attributes for cell measure information
+        area = None
+        if "cell_measures" in v.attrs and vname not in ["areacella","areacello"]:
+            if ("areacella" in v.attrs["cell_measures"] and
+                self.area_atm is not None): area = self.area_atm.copy()
+            if ("areacello" in v.attrs["cell_measures"] and
+                self.area_ocn is not None): area = self.area_ocn.copy()
+            if "cell_methods" in v.attrs and area is not None:
+                if ("where land" in v.attrs["cell_methods"] and
+                    self.frac_lnd is not None): area *= self.frac_lnd
+        t0 = kwargs.get("t0",None)
+        tf = kwargs.get("tf",None)
+        v = Variable(filename=V[0],varname=vname,cell_measure=area,t0=t0,tf=tf)
+            
         latlon = kwargs.get("latlon",None)
         if latlon is not None:
+            raise ValueError("Datasite extraction not yet implemented")
             lat,lon = latlon
             if v.lon.data.max() > 180:
                 if lon < 0: lon += 360
             v = v.sel(lat=lat,lon=lon,method='nearest')
             
-        v.ilamb.setBounds(dset)
-        area = frac = None
-        if "cell_measures" in v.attrs and vname not in ["areacella","areacello"]:
-            if "areacella" in v.attrs["cell_measures"]: area = self.area_atm
-            if "areacello" in v.attrs["cell_measures"]: area = self.area_ocn
-            if "cell_methods" in v.attrs:
-                if "where land" in v.attrs["cell_methods"]: frac = self.frac_lnd
-            v.ilamb.setMeasure(area=area,fraction=frac)
         return v
 
     def _getVariableExpression(self,vname,expr,**kwargs):

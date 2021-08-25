@@ -6,6 +6,18 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
+def align_latlon(a,b):
+    """We need some conditional checks on aligning.
+
+    FIX: Need to check all dimensions, not just these
+    """
+    lata = a.ds[a.lat_name]; latb = b.ds[b.lat_name]
+    lona = a.ds[a.lon_name]; lonb = b.ds[b.lon_name]
+    if np.allclose(lata,latb,atol=1e-3) and np.allclose(lona,lonb,atol=1e-3):
+        a.ds,b.ds = xr.align(a.ds,b.ds,join='override',copy=False)
+        return a,b
+    raise ValueError("Could not align")
+
 class Variable():
     """Extends an xarray Dataset/Dataarray to track quantities we need to
        interpolation as well as provides implementations of
@@ -63,6 +75,12 @@ class Variable():
             if dx is None:
                 self._createCellMeasure()
             else:
+                try:
+                    self.ds,dx = xr.align(self.ds,dx,join='override',copy=False)
+                except:
+                    print(self.ds)
+                    print(dx)
+                    import sys; sys.exit(1)
                 self.ds['cell_measure'] = dx
                 
     def __str__(self):
@@ -76,7 +94,16 @@ class Variable():
 
     def __repr__(self):
         return self.__str__()
-    
+
+    def __sub__(self,other):
+        self,other = align_latlon(self,other)
+        cm =  self.ds['cell_measure'] if  'cell_measure' in  self.ds                 else None
+        cm = other.ds['cell_measure'] if ('cell_measure' in other.ds and cm is None) else None
+        tm =  self.ds['time_measure'] if  'time_measure' in  self.ds                 else None
+        tm = other.ds['time_measure'] if ('time_measure' in other.ds and cm is None) else None
+        return Variable(da = self.ds[self.varname] - other.ds[other.varname],
+                        cell_measure = cm, time_measure = tm)
+        
     def convert(self,unit,density=998.2,molar_mass=12.011):
         """Using cf_units (UDUNITS2) convert the unit in place
         - handles ( M L-2 T-1 ) --> ( L T-1 ), assuming water
@@ -176,7 +203,7 @@ class Variable():
         v = Variable(da = out, varname = da.name + "_sint", time_measure = tm)
         return v
 
-    def detrend(self,dim,degree=1):
+    def detrend(self,dim=['time'],degree=1):
         """Remove a polynomial trend from each dimension, one at a time.
 
         """
@@ -189,6 +216,41 @@ class Variable():
         if 'ilamb' not in self.ds[self.varname].attrs: self.ds[self.varname].attrs['ilamb'] = ''
         dim = ["'%s'" % d for d in dim]
         self.ds[self.varname].attrs['ilamb'] += "detrend(dim=[%s],degree=%d); " % (",".join(dim),degree)
+        return self
+    
+    def decycle(self):
+        """Remove the annual cycle based on monthly means in place.
+
+        """
+        da = self.ds[self.varname]
+        attrs = da.attrs
+        gr = da.groupby('time.month')
+        self.ds[self.varname] = gr - gr.mean(dim='time')
+        if 'ilamb' not in attrs: attrs['ilamb'] = ''
+        attrs['ilamb'] += "decycle(); "
+        self.ds[self.varname].attrs = attrs
+        return self
+
+    def correlation(self,v,dim):
+        """Compute the correlation is the specified dimension.
+
+        """
+        # FIX: need to check that v is compatible with self
+        self,v = align_latlon(self,v)
+        if type(dim) is not type([]): dim = [dim]
+        assert set(dim).issubset(set(self.ds[self.varname].dims))
+        assert set(dim).issubset(set(   v.ds[   v.varname].dims))
+        r = xr.corr(self.ds[self.varname],v.ds[v.varname],dim=dim)
+        dim = ["'%s'" % d for d in dim]
+        attrs = {}
+        attrs['ilamb'] = "correlation(%s,%s,dim=[%s]); " % (self.varname,v.varname,",".join(dim))
+        r.attrs = attrs
+        tm = self.ds['time_measure'] if ('time_measure' in self.ds and 'time' in r.dims) else None
+        cm = self.ds['cell_measure'] if ('cell_measure' in self.ds and (self.lat_name in r.dims and
+                                                                        self.lon_name in r.dims)) else None
+        r = Variable(da = r, varname = "corr_%s_%s" % (self.varname,v.varname),
+                     cell_measure = cm, time_measure = tm)
+        return r 
 
     def _createTimeMeasure(self):
         """Create the time measures from the bounds if present.
@@ -210,7 +272,7 @@ class Variable():
             raise ValueError(msg)
         if 'ilamb' not in da.attrs: self.ds[self.varname].attrs['ilamb'] = ''
         self.ds[self.varname].attrs['ilamb'] += "_createTimeMeasure(); "
-        
+    
     def _createCellMeasure(self):
         """Creates the cell measures from the bounds if present.
 
@@ -263,20 +325,17 @@ class Variable():
 if __name__ == "__main__":
 
     def test_timeint():
-        
         # reference dataset with no cell measures
         fn = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc"
         v  = Variable(filename = fn, varname = "gpp")
         vt = v.integrateInTime(mean=True).convert("g m-2 d-1")
         vt.plot(cmap="Greens",vmin=0); plt.show()
-        
         # the model needs them and is not masked where the measures
         # are 0, like over oceans
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01")
         vt = v.integrateInTime(mean=True).convert("g m-2 d-1")
         vt.plot(cmap="Greens",vmin=0); plt.show()
-        
         # in order to get the proper masking, we need to associate
         # cell measures
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/areacella_fx_CanESM5_historical_r1i1p1f1_gn.nc"
@@ -290,15 +349,12 @@ if __name__ == "__main__":
         vt.plot(cmap="Greens",vmin=0); plt.show()
         
     def test_spaceint():
-
         fig,ax = plt.subplots(tight_layout=True)
-        
         # reference dataset with no cell measures
         fn = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc"
         v  = Variable(filename = fn, varname = "gpp").convert('g m-2 d-1')
         vs = v.integrateInSpace(mean=True)
         vs.plot(ax=ax,label='reference')
-
         # the model needs measures and is not masked where the
         # measures are 0, like over oceans, unlike netCDF4 python
         # bindings, they are not based on numpy masked arrays and so
@@ -307,7 +363,6 @@ if __name__ == "__main__":
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01").convert('g m-2 d-1')
         vs = v.integrateInSpace(mean=True)
         vs.plot(ax=ax,label='missing model measures')
-
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/areacella_fx_CanESM5_historical_r1i1p1f1_gn.nc"
         dx = Variable(filename = fn,varname = "areacella").convert("m2")
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/sftlf_fx_CanESM5_historical_r1i1p1f1_gn.nc"
@@ -317,7 +372,6 @@ if __name__ == "__main__":
                       cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
         vs = v.integrateInSpace(mean=True).convert('g m-2 d-1')
         vs.plot(ax=ax,label='with correct model measures')
-
         plt.legend()
         plt.show() # requires nc-time-axis
         plt.close()
@@ -349,7 +403,30 @@ if __name__ == "__main__":
         plt.legend()
         plt.show()
 
-    #test_timeint()
-    #test_spaceint()
-    test_detrend()
+    def test_decycle():
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/areacella_fx_CanESM5_historical_r1i1p1f1_gn.nc"
+        dx = Variable(filename = fn,varname = "areacella").convert("m2")
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/sftlf_fx_CanESM5_historical_r1i1p1f1_gn.nc"
+        df = Variable(filename = fn,varname = "sftlf").convert("1")    
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
+        v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01",
+                      cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
+        vs = v.integrateInSpace(mean=True).convert('g m-2 d-1')
+        fig,ax = plt.subplots(tight_layout=True)
+        vs.plot(ax=ax,label='original')
+        vs.detrend(dim='time')
+        print(vs.ds.gpp_sint.ilamb)
+        vs.plot(ax=ax,label='detrend')
+        vs.decycle()
+        print(vs.ds.gpp_sint.ilamb)
+        vs.plot(ax=ax,label='decycle')
+        vs = v.integrateInSpace(mean=True).convert('g m-2 d-1').detrend(dim='time').decycle()
+        print(vs.ds.gpp_sint.ilamb)
+        vs.plot(ax=ax,label='composed',linestyle=':')
+        plt.legend()
+        plt.show()
     
+    test_timeint()
+    test_spaceint()
+    test_detrend()
+    test_decycle()
