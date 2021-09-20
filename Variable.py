@@ -137,7 +137,10 @@ class Variable():
         """
         da = self.ds[self.varname]
         if da.ndim == 2:
-            fig,ax = plt.subplots(dpi=200,subplot_kw={'projection':ccrs.Robinson()})
+            fig,ax = plt.subplots(dpi=200,
+                                  tight_layout=kwargs.pop('tight_layout') if 'tight_layout' in kwargs else None,
+                                  figsize=kwargs.pop('figsize') if 'figsize' in kwargs else None,
+                                  subplot_kw={'projection':ccrs.Robinson()})
             if "cell_measure" in self.ds: da = xr.where(self.ds['cell_measure']<1,np.nan,da)
             p = da.plot(ax=ax,transform=ccrs.PlateCarree(),**kwargs)
             ax.add_feature(cfeature.NaturalEarthFeature('physical','land','110m',
