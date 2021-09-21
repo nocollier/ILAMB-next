@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 
+from Regions import Regions
+ilamb_regions = Regions()
+
 def align_latlon(a,b):
     """We need some conditional checks on aligning.
 
@@ -179,18 +182,19 @@ class Variable():
         v = Variable(da = out, varname = da.name + "_tint", cell_measure = cm)
         return v
 
-    def integrateInSpace(self,mean=False):
+    def integrateInSpace(self,region=None,mean=False):
         """
         """
         assert "cell_measure" in self.ds
-        da = self.ds[self.varname]
-        cm = self.ds['cell_measure']
+        ds = self.ds if region is None else ilamb_regions.getMask(region,self)
+        da = ds[self.varname]
+        cm = ds['cell_measure']
         v,dx = xr.align(da,xr.where(cm<1,np.nan,cm),join='override',copy=False)
         out = (v*dx).sum(dx.dims)
-        units = Unit(da.attrs['units'])
+        units = Unit(self.ds[self.varname].attrs['units'])
         out.attrs = {key:a for key,a in v.attrs.items() if "cell_" not in key}
         if 'ilamb' not in out.attrs: out.attrs['ilamb'] = ''
-        out.attrs['ilamb'] += "integrateInSpace(mean=%s); " % (mean)
+        out.attrs['ilamb'] += "integrateInSpace(mean=%s%s); " % (mean,"" if region is None else ",region='%s'" % region)
         if mean:
             mask = da.isnull()
             dims = set(mask.dims).difference(set(dx.dims))
