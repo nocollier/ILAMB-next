@@ -3,6 +3,8 @@ Critical Soil Moisture as given in:
 
 https://github.com/pdirmeyer/l-a-cheat-sheets/blob/main/Coupling_metrics_V30_CriticalSM.pdf
 
+https://agupubs.onlinelibrary.wiley.com/doi/full/10.1029/2019JD031672#jgrd56114-tbl-0001
+
 """
 from ModelResult import ModelResult
 import matplotlib.pyplot as plt
@@ -100,7 +102,8 @@ def CriticalSoilMoisture(m,**kwargs):
     ax.set_xlabel('Surface Soil Moisture [vol-%]')
     ax.set_ylabel('Correlation or Correlation Difference [1]')
     plt.savefig("dR_%s_%s_%s_%s.png" % (m.name,nveg,nenergy,nwater))
-
+    plt.close()
+    
 
 if __name__ == "__main__":
 
