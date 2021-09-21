@@ -21,6 +21,29 @@ def align_latlon(a,b):
         return a,b
     raise ValueError("Could not align")
 
+def extents(da):
+    """Find the extent of the non-null data.
+
+    """
+    nl = (da.isnull()==False)
+    lat = np.where(nl.sum('lon')>0)[0]
+    lon = np.where(nl.sum('lat')>0)[0]
+    return np.asarray([float(da.lon[lon[0]]),float(da.lon[lon[-1]]),float(da.lat[lat[0]]),float(da.lat[lat[-1]])])
+
+def pick_projection(extents):
+    """Given plot extents choose projection.
+
+    """
+    if (extents[1]-extents[0]) > 330:
+        proj = ccrs.Robinson(central_longitude=0)
+        if (extents[2] >   0) and (extents[3] > 75):
+            proj = ccrs.Orthographic(central_latitude=+90,central_longitude=0)
+        if (extents[2] < -75) and (extents[3] <  0):
+            proj = ccrs.Orthographic(central_latitude=-90,central_longitude=0)
+    else:
+        proj = ccrs.PlateCarree(central_longitude=extents[:2].mean())
+    return proj
+        
 class Variable():
     """Extends an xarray Dataset/Dataarray to track quantities we need to
        interpolation as well as provides implementations of
@@ -138,14 +161,34 @@ class Variable():
     def plot(self,**kwargs):
         """
         """
-        da = self.ds[self.varname]
+        region = kwargs.get("region",None)
+        ds = self.ds
+        if region is not None:
+            kwargs.pop("region")
+            ds = ilamb_regions.getMask(region,self)
+        da = ds[self.varname]
         if da.ndim == 2:
+            if "cell_measure" in ds: da = xr.where(ds['cell_measure']<1,np.nan,da)
+            ext = extents(da)
+            proj = pick_projection(ext)
             fig,ax = plt.subplots(dpi=200,
                                   tight_layout=kwargs.pop('tight_layout') if 'tight_layout' in kwargs else None,
                                   figsize=kwargs.pop('figsize') if 'figsize' in kwargs else None,
-                                  subplot_kw={'projection':ccrs.Robinson()})
-            if "cell_measure" in self.ds: da = xr.where(self.ds['cell_measure']<1,np.nan,da)
+                                  subplot_kw={'projection':proj})
             p = da.plot(ax=ax,transform=ccrs.PlateCarree(),**kwargs)
+
+            # set plot extents
+            percent_pad = 0.1
+            if (ext[1]-ext[0]) > 330:
+                ext[:2] = [-180,180] # set_extent doesn't like (0,360)
+            else:
+                dx = percent_pad*(ext[1]-ext[0])
+                dy = percent_pad*(ext[3]-ext[2])
+                ext[0] -= dx; ext[1] += dx
+                ext[2] -= dy; ext[3] += dy
+            ax.set_extent(ext,ccrs.PlateCarree())
+
+            # add ocean/land shading
             ax.add_feature(cfeature.NaturalEarthFeature('physical','land','110m',
                                                         edgecolor='face',
                                                         facecolor='0.875'),zorder=-1)
@@ -432,8 +475,23 @@ if __name__ == "__main__":
         vs.plot(ax=ax,label='composed',linestyle=':')
         plt.legend()
         plt.show()
-    
-    test_timeint()
-    test_spaceint()
-    test_detrend()
-    test_decycle()
+
+    def test_plot():
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/areacella_fx_CanESM5_historical_r1i1p1f1_gn.nc"
+        dx = Variable(filename = fn,varname = "areacella").convert("m2")
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/sftlf_fx_CanESM5_historical_r1i1p1f1_gn.nc"
+        df = Variable(filename = fn,varname = "sftlf").convert("1")    
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
+        v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01",
+                      cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
+        vt = v.integrateInTime(mean=True).convert('g m-2 d-1')
+        vt.plot(cmap="Greens",vmin=0,region="nhsa"); plt.show()
+        vt.plot(cmap="Greens",vmin=0,region="shsa"); plt.show()
+        vt.plot(cmap="Greens",vmin=0); plt.show()
+        
+        
+    #test_timeint()
+    #test_spaceint()
+    #test_detrend()
+    #test_decycle()
+    test_plot()
