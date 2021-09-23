@@ -122,14 +122,44 @@ class Variable():
         return self.__str__()
 
     def __sub__(self,other):
+        other.convert(self.units())
         self,other = align_latlon(self,other)
         cm =  self.ds['cell_measure'] if  'cell_measure' in  self.ds                 else None
         cm = other.ds['cell_measure'] if ('cell_measure' in other.ds and cm is None) else None
         tm =  self.ds['time_measure'] if  'time_measure' in  self.ds                 else None
         tm = other.ds['time_measure'] if ('time_measure' in other.ds and cm is None) else None
-        return Variable(da = self.ds[self.varname] - other.ds[other.varname],
-                        cell_measure = cm, time_measure = tm)
-        
+        out = self.ds[self.varname]-other.ds[other.varname]
+        out.name = "bias"
+        out.attrs['units'] = self.units()
+        return Variable(da = out,cell_measure = cm, time_measure = tm)
+
+    def __truediv__(self,other):
+        self,other = align_latlon(self,other)
+        cm =  self.ds['cell_measure'] if  'cell_measure' in  self.ds                 else None
+        cm = other.ds['cell_measure'] if ('cell_measure' in other.ds and cm is None) else None
+        tm =  self.ds['time_measure'] if  'time_measure' in  self.ds                 else None
+        tm = other.ds['time_measure'] if ('time_measure' in other.ds and cm is None) else None
+        out = Variable(da = self.ds[self.varname]/other.ds[other.varname],
+                       cell_measure = cm, time_measure = tm)
+        u  = Unit( self.units())
+        u /= Unit(other.units())
+        out.ds[out.varname].attrs['units'] = str(u)
+        return out
+    
+    def timeBounds(self):
+        """Return the time extent of the dataset/array
+        """
+        if "time" not in self.ds[self.varname].dims: return None
+        t = self.ds["time"]
+        if 'bounds' in t.attrs:
+            if t.attrs['bounds'] in self.ds:
+                t = self.ds[t.attrs['bounds']]
+        return t.min(),t.max()
+
+    def units(self):
+        if "units" not in self.ds[self.varname].attrs: return "1"
+        return self.ds[self.varname].attrs['units']
+    
     def convert(self,unit,density=998.2,molar_mass=12.011):
         """Using cf_units (UDUNITS2) convert the unit in place
         - handles ( M L-2 T-1 ) --> ( L T-1 ), assuming water
@@ -176,25 +206,23 @@ class Variable():
                                   figsize=kwargs.pop('figsize') if 'figsize' in kwargs else None,
                                   subplot_kw={'projection':proj})
             p = da.plot(ax=ax,transform=ccrs.PlateCarree(),**kwargs)
-
-            # set plot extents
-            percent_pad = 0.1
-            if (ext[1]-ext[0]) > 330:
-                ext[:2] = [-180,180] # set_extent doesn't like (0,360)
-            else:
-                dx = percent_pad*(ext[1]-ext[0])
-                dy = percent_pad*(ext[3]-ext[2])
-                ext[0] -= dx; ext[1] += dx
-                ext[2] -= dy; ext[3] += dy
-            ax.set_extent(ext,ccrs.PlateCarree())
-
-            # add ocean/land shading
             ax.add_feature(cfeature.NaturalEarthFeature('physical','land','110m',
                                                         edgecolor='face',
                                                         facecolor='0.875'),zorder=-1)
             ax.add_feature(cfeature.NaturalEarthFeature('physical','ocean','110m',
                                                         edgecolor='face',
                                                         facecolor='0.750'),zorder=-1)
+            # cleanup plotting extents
+            percent_pad = 0.1
+            if (ext[1]-ext[0]) > 330:
+                ext[:2] = [-180,180] # set_extent doesn't like (0,360)
+                ext[2:] = [- 90, 90]
+            else:
+                dx = percent_pad*(ext[1]-ext[0])
+                dy = percent_pad*(ext[3]-ext[2])
+                ext[0] -= dx; ext[1] += dx
+                ext[2] -= dy; ext[3] += dy
+            ax.set_extent(ext,ccrs.PlateCarree())
         else:
             da.plot(**kwargs)
             
@@ -225,6 +253,24 @@ class Variable():
         v = Variable(da = out, varname = da.name + "_tint", cell_measure = cm)
         return v
 
+    def stddev(self,mean=None):
+        """
+        """
+        if mean is None: mean = self.integrateInTime(mean=True)
+        out = (self.ds[self.varname] - mean.ds[mean.varname])**2
+        attrs = {key:a for key,a in self.ds[self.varname].attrs.items() if ("time"         not in key and
+                                                                            "actual_range" not in key)}
+        out.attrs = attrs
+        if 'ilamb' not in out.attrs: out.attrs['ilamb'] = ''
+        out.attrs['ilamb'] += "stddev(); "
+        tm = self.ds["time_measure"] if "time_measure" in self.ds else None
+        cm = self.ds["cell_measure"] if "cell_measure" in self.ds else None
+        v = Variable(da = out, varname = self.varname + "_std", cell_measure = cm, time_measure = tm)
+        v = v.integrateInTime(mean=True)
+        v.ds = v.ds.rename({v.varname:self.varname + "_std"})
+        v.varname = self.varname + "_std"
+        return v
+    
     def integrateInSpace(self,region=None,mean=False):
         """
         """
@@ -302,6 +348,43 @@ class Variable():
                      cell_measure = cm, time_measure = tm)
         return r 
 
+    def nestSpatialGrids(self,*args):
+        """
+        """
+        lat = self.ds[self.lat_name].values
+        lon = self.ds[self.lon_name].values
+        for v in args:
+            lat = np.union1d(lat,v.ds[v.lat_name])
+            lon = np.union1d(lon,v.ds[v.lon_name])
+        out = [self.interpolate(lat=lat,lon=lon)]
+        for v in args: out.append(v.interpolate(lat=lat,lon=lon))
+        return out
+
+    def interpolate(self,lat=None,lon=None,res=None,**kwargs):
+        """
+        """
+        varname = self.varname
+        method = kwargs.get("method","nearest")
+        if res is not None:
+            lat = self.ds[self.lat_name]
+            lat = np.linspace(lat.min(),lat.max(),int((lat.max()-lat.min())/res)+1)
+            lon = self.ds[self.lon_name]
+            lon = np.linspace(lon.min(),lon.max(),int((lon.max()-lon.min())/res)+1)
+        assert lat is not None
+        assert lon is not None
+        dx = Variable(da = self.ds['cell_measure'],varname = "cell_fraction")
+        self.ds['cell_fraction'] = (dx.ds['cell_fraction']/dx.ds['cell_measure']).clip(0,1)
+        ds = self.ds.interp(coords={self.lat_name:lat,self.lon_name:lon},method=method)        
+        tm = self.ds['time_measure'] if ('time_measure' in self.ds and 'time' in self.ds[varname].dims) else None
+        out = Variable(da = ds[varname], varname = varname, time_measure = tm)
+        out.ds['cell_measure'] *= ds['cell_fraction']        
+        out.ds[varname].attrs = dict(self.ds[varname].attrs)
+        for skip in ["cell_measures","cell_methods"]:
+            if skip in out.ds[varname].attrs: out.ds[varname].attrs.pop(skip)
+        if 'ilamb' not in out.ds[varname].attrs: out.ds[varname].attrs['ilamb'] = ''
+        out.ds[varname].attrs['ilamb'] += "interpolate(); "
+        return out
+   
     def _createTimeMeasure(self):
         """Create the time measures from the bounds if present.
         """
@@ -351,10 +434,12 @@ class Variable():
             if self.is_regular:
                 xb = da[self.lon_name].values
                 yb = da[self.lat_name].values
-                xb = np.vstack([np.hstack([xb[0]-0.5*(xb[1]-xb[0]),xb[:-1]]),
-                                np.hstack([xb[1:],xb[-1]+0.5*(xb[-1]-xb[-2])])]).T
-                yb = np.vstack([np.hstack([yb[0]-0.5*(yb[1]-yb[0]),yb[:-1]]),
-                                np.hstack([yb[1:],yb[-1]+0.5*(yb[-1]-yb[-2])])]).T
+                dx = 0.5*(xb[:-1]+xb[1:])
+                dy = 0.5*(yb[:-1]+yb[1:])
+                xb = np.vstack([np.hstack([xb[0]-0.5*(xb[1]-xb[0]),dx]),
+                                np.hstack([dx,xb[-1]+0.5*(xb[-1]-xb[-2])])]).T
+                yb = np.vstack([np.hstack([yb[0]-0.5*(yb[1]-yb[0]),dy]),
+                                np.hstack([dy,yb[-1]+0.5*(yb[-1]-yb[-2])])]).T
                 xb = xb.clip(0,360) if xb.max() > 180 else xb.clip(-180,180)
                 yb = yb.clip(-90,90)
                 xb =        xb*np.pi/180
@@ -488,10 +573,47 @@ if __name__ == "__main__":
         vt.plot(cmap="Greens",vmin=0,region="nhsa"); plt.show()
         vt.plot(cmap="Greens",vmin=0,region="shsa"); plt.show()
         vt.plot(cmap="Greens",vmin=0); plt.show()
+
+    def test_cellmeasures():
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/areacella_fx_CanESM5_historical_r1i1p1f1_gn.nc"
+        dx = Variable(filename = fn,varname = "areacella").convert("m2")
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/sftlf_fx_CanESM5_historical_r1i1p1f1_gn.nc"
+        df = Variable(filename = fn,varname = "sftlf").convert("1")    
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
+        v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01")
+        e  = np.abs((v.ds.cell_measure - dx.ds.areacella)/dx.ds.areacella)
+        assert e.max()<1e-4
+        v.ds = v.ds.drop(["cell_measure","lat_bnds","lon_bnds"])
+        v._createCellMeasure()
+        e  = np.abs((v.ds.cell_measure - dx.ds.areacella)/dx.ds.areacella)
+        assert e.mean()<1e-2 # less strict as this is more approximate
         
-        
-    #test_timeint()
-    #test_spaceint()
-    #test_detrend()
-    #test_decycle()
+    def test_interp():
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/areacella_fx_CanESM5_historical_r1i1p1f1_gn.nc"
+        dx = Variable(filename = fn,varname = "areacella").convert("m2")
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/sftlf_fx_CanESM5_historical_r1i1p1f1_gn.nc"
+        df = Variable(filename = fn,varname = "sftlf").convert("1")    
+        fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
+        v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01",
+                      cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
+        vt = v.integrateInTime(mean=True).convert('g m-2 d-1')
+        lat = np.linspace(-90, 90,361); lat = 0.5*(lat[:-1]+lat[1:])
+        lon = np.linspace(  0,360,721); lon = 0.5*(lon[:-1]+lon[1:])
+        Vt = vt.interpolate(lat=lat,lon=lon)
+        vt.plot(cmap="Greens",vmin=0); plt.show()
+        Vt.plot(cmap="Greens",vmin=0); plt.show()
+        vt = vt.integrateInSpace().convert("Pg yr-1").ds.gpp_tint_sint.values
+        Vt = Vt.integrateInSpace().convert("Pg yr-1").ds.gpp_tint_sint.values
+        e  = np.abs((Vt-vt)/vt)
+        assert e < 1e-2
+
+    test_timeint()
+    test_spaceint()
+    test_detrend()
+    test_decycle()
     test_plot()
+    test_interp()
+    test_cellmeasures()
+
+    
+        
