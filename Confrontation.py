@@ -2,6 +2,8 @@ import os
 from Variable import Variable
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
+import xarray as xr
 
 def is_spatially_aligned(a,b):
     """Are the lats and lons of a and b aligned?
@@ -39,20 +41,119 @@ def adjust_lon(a,b):
         b.ds = b.ds.sortby(b.lon_name)
     return a,b
 
-def ScoreBias(r0,c0,r=None,c=None,regions=None):
+def sanitize_dict(d):
+    """Cleanup dictionaries for use in creation of a xarray dataset.
+
+    * make sure the dataarray names match the keys of the dictionary
+    * add '_' to lat/lon dimensions if more than one unique set exists
+    * sometimes arrays get a 'land' coordinate which looks weird on plots
+
     """
-    r0,c0 - original versions
-    r,c - grid aligned versions
+    for key in d:
+        v = d[key]
+        #d[key].ds[d[key].varname].rename({d[key].varname:key})
+        
+    return d
+    
+def ScoreBias(r0,c0,r=None,c=None,model_name="",regions=[None]):
     """
+
+    """
+    v = r0.varname
+    
+    # period means on original grids
     rm0 = r0.integrateInTime(mean=True)
     cm0 = c0.integrateInTime(mean=True)
+
+    # if we have temporal data, the normalizer is the std
     norm0 = r0.stddev() if r0.ds['time'].size > 1 else rm0
-    
+
+    # interpolate to a nested grid
     rm,cm,norm = rm0.nestSpatialGrids(cm0,norm0)
     bias = cm-rm
-    bias.ds[bias.varname] = np.abs(bias.ds[bias.varname])
-    err = bias/norm
+    
+    # do we have reference uncertainties?
+    ru = rm.uncertainty()
+    un = 0 if ru is None else ru.ds[ru.varname]
+    
+    # compute the bias score
+    eps  = cm-rm
+    eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)
+    eps.ds[eps.varname].attrs['units'] = cm.units()
+    eps /= norm    
+    eps.ds[eps.varname] = np.exp(-eps.ds[eps.varname])
 
+    # populate scalars over regions
+    df = []
+    for region in regions:
+        s = rm0.integrateInSpace(mean=True,region=region)
+        df.append(['Benchmark',region,'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
+        s = cm0.integrateInSpace(mean=True,region=region)
+        df.append([model_name,region,'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
+        s = bias.integrateInSpace(mean=True,region=region)
+        df.append([model_name,region,'Bias','scalar',s.units(),float(s.ds[s.varname].values)])
+        s = eps.integrateInSpace(mean=True,region=region)
+        df.append([model_name,region,'Bias Score','score',s.units(),float(s.ds[s.varname].values)])
+    df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])
+
+    # collect output for intermediate files
+    r_plot = {
+        "timeint_of_%s"       % v: rm0,
+    }
+    if ru is not None: r_plot["uncertain"] = ru
+    c_plot = {
+        "timeint_of_%s"       % v: cm0,
+        "bias_map_of_%s"      % v: bias,
+        "biasscore_map_of_%s" % v: eps
+    }
+    return r_plot,c_plot,df
+
+def ScoreCycle(r0,c0,r=None,c=None,model_name="",regions=[None]):
+    """
+
+    """
+    if (r0.ds['time'].size < 12 or c0.ds['time'].size < 12): return {},{},[]
+    v = r0.varname
+    
+    # compute cycle and month of maximum
+    rc0 = r0.cycle()
+    cc0 = c0.cycle()
+    rmx0 = rc0.maxMonth()
+    cmx0 = cc0.maxMonth()
+
+    # phase shift on nested grid
+    rmx,cmx = rmx0.nestSpatialGrids(cmx0)
+    ps = cmx-rmx
+    
+    # manually fix the phase shift to [-6,+6]
+    attrs = ps.ds[ps.varname].attrs
+    ps.ds[ps.varname] = xr.where(ps.ds[ps.varname]<-6,ps.ds[ps.varname]+12,ps.ds[ps.varname])
+    ps.ds[ps.varname] = xr.where(ps.ds[ps.varname]>+6,ps.ds[ps.varname]-12,ps.ds[ps.varname])
+    ps.ds[ps.varname].attrs = attrs
+    
+    # compute score
+    score = Variable(da = xr.apply_ufunc(lambda a: 1-np.abs(a)/6,ps.ds[ps.varname]),
+                     varname = "shiftscore_map_of_%s" % v,
+                     cell_measure = ps.ds['cell_measure'] if 'cell_measure' in ps.ds else None)
+    score.ds[score.varname].attrs['units'] ='1'
+    
+    # collect output for intermediate files
+    r_plot = {
+        'phase_map_of_%s' % v: rmx0
+    }
+    c_plot = {
+        'phase_map_of_%s' % v: cmx0
+    }
+    df = []
+    for region in regions:
+        r_plot['spaceint_of_%s_over_%s' % (v,region)] = rc0.integrateInSpace(mean=True,region=region)
+        c_plot['spaceint_of_%s_over_%s' % (v,region)] = cc0.integrateInSpace(mean=True,region=region)
+        s = ps.integrateInSpace(mean=True,region=region)
+        df.append([model_name,region,'Phase Shift','scalar',s.units(),float(s.ds[s.varname].values)])
+        s = score.integrateInSpace(mean=True,region=region)
+        df.append([model_name,region,'Seasonal Cycle Score','score',s.units(),float(s.ds[s.varname].values)])
+    df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])        
+    return r_plot,c_plot,df
     
 class Confrontation(object):
 
@@ -60,9 +161,15 @@ class Confrontation(object):
         """
         source
         variable
+        unit
+        regions
+        master
         """
         self.source   = kwargs.get(  "source",None)
         self.variable = kwargs.get("variable",None)
+        self.unit     = kwargs.get(    "unit",None)
+        self.regions  = kwargs.get( "regions",[None])
+        self.master   = kwargs.get(  "master",True)
         assert self.source is not None
         if not os.path.isfile(self.source):
             msg = "Cannot find the source, tried looking here: '%s'" % self.source
@@ -74,6 +181,7 @@ class Confrontation(object):
         """
         r = Variable(filename = self.source,
                      varname  = self.variable)
+        if self.unit is not None: r.convert(self.unit)
         t0,tf = r.timeBounds()
         c = m.getVariable(self.variable,t0=t0,tf=tf)
         c.convert(r.units())
@@ -85,19 +193,53 @@ class Confrontation(object):
 
         """
         r0,c0 = self.stageData(m)
-        #r,c = r0.nestSpatialGrids(c0)
-        ScoreBias(r0,c0,regions=['global','nhsa'])
+
+        # initialize 
+        rplot = {}; cplot = {}; dfm = []
+
+        # bias scoring
+        rp,cp,df = ScoreBias(r0,c0,model_name=m.name,regions=self.regions)
+        rplot.update(rp); cplot.update(cp); dfm.append(df)
+
+        # rmse scoring
+        
+        # cycle scoring
+        rp,cp,df = ScoreCycle(r0,c0,model_name=m.name,regions=self.regions)
+        rplot.update(rp); cplot.update(cp); dfm.append(df)
+
+        # spatial distribution scoring
+        
+        # write outputs
+        dfm = pd.concat([df for df in dfm if len(df)>0]).reset_index()
+        print(dfm)
+
+        for key in cplot:
+            cplot[key].plot()
+            plt.gca().set_title(key)
+            plt.show()
+            
+        return
         
         
 if __name__ == "__main__":
     from ModelResult import ModelResult
 
-    m = ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CESM2",name="CESM2")
-    m.findFiles()
-    m.getGridInformation()
-    #c = Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc",
-    #                  variable = "gpp")
-    c = Confrontation(source = "/home/nate/work/ILAMB-Data/CLASS/pr.nc",
-                      variable = "pr")
-    c.confront(m)
+    M = [ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CESM2",name="CESM2"),
+         ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5",name="CanESM5")]
+    for m in M:
+        m.findFiles()
+        m.getGridInformation()
+
+    c = Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc",
+                      variable = "gpp",
+                      unit = "g m-2 d-1",
+                      regions = [None,"nhsa"])
+    for m in M: c.confront(m)
+
+    if 1:
+        c = Confrontation(source = "/home/nate/work/ILAMB-Data/CLASS/pr.nc",
+                          variable = "pr",
+                          unit = "kg m-2 d-1")
+        for m in M: c.confront(m)
     
+

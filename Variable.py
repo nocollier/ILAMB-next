@@ -1,12 +1,11 @@
 import xarray as xr
 from cf_units import Unit
 import numpy as np
-
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-
 from Regions import Regions
+
 ilamb_regions = Regions()
 
 def align_latlon(a,b):
@@ -141,8 +140,7 @@ class Variable():
         tm = other.ds['time_measure'] if ('time_measure' in other.ds and cm is None) else None
         out = Variable(da = self.ds[self.varname]/other.ds[other.varname],
                        cell_measure = cm, time_measure = tm)
-        u  = Unit( self.units())
-        u /= Unit(other.units())
+        u = Unit( self.units())/Unit(other.units())
         out.ds[out.varname].attrs['units'] = str(u)
         return out
     
@@ -156,6 +154,22 @@ class Variable():
                 t = self.ds[t.attrs['bounds']]
         return t.min(),t.max()
 
+    def uncertainty(self):
+        """
+
+        """
+        if "bounds" not in self.ds[self.varname].attrs: return None
+        if self.ds[self.varname].attrs['bounds'] not in self.ds: return None
+        # FIX: need to detect the 'nb' dimension
+        up  = self.ds[self.ds[self.varname].attrs['bounds']].isel({'nb':1})
+        dn  = self.ds[self.ds[self.varname].attrs['bounds']].isel({'nb':0})
+        mid = self.ds[self.varname]
+        u   = np.sqrt((up-mid)**2+(dn-mid)**2)
+        u.attrs['units'] = self.units()
+        cm  = self.ds['cell_measure'] if 'cell_measure' in self.ds else None
+        tm  = self.ds['time_measure'] if 'time_measure' in self.ds else None
+        return Variable(da = u,cell_measure = cm, time_measure = tm)
+        
     def units(self):
         if "units" not in self.ds[self.varname].attrs: return "1"
         return self.ds[self.varname].attrs['units']
@@ -186,6 +200,9 @@ class Variable():
             src_unit *= molar_density
         src_unit.convert(self.ds[self.varname].data,tar_unit,inplace=True)
         self.ds[self.varname].attrs['units'] = unit
+        if "bounds" in self.ds[self.varname].attrs:
+            if self.ds[self.varname].attrs['bounds'] in self.ds:                
+                src_unit.convert(self.ds[self.ds[self.varname].attrs['bounds']].data,tar_unit,inplace=True)
         return self
 
     def plot(self,**kwargs):
@@ -238,6 +255,9 @@ class Variable():
         da = self.ds[self.varname]
         dt = self.ds['time_measure']
         out = (da*dt).sum(dt.dims,min_count=1)
+        out_bnds = None
+        if "bounds" in da.attrs and da.attrs['bounds'] in self.ds:
+            out_bnds = (self.ds[da.attrs['bounds']]*dt).sum(dt.dims,min_count=1)            
         units = Unit(da.units)
         attrs = {key:a for key,a in da.attrs.items() if ("time"         not in key and
                                                          "actual_range" not in key)}
@@ -246,11 +266,16 @@ class Variable():
         out.attrs['ilamb'] += "integrateInTime(t0='%s',tf='%s',mean=%s); " % (t0,tf,mean)
         if mean:
             out /= dt.sum()
+            if out_bnds is not None: out_bnds /= dt.sum()
         else:
             units *= Unit("d")
             out.attrs['units'] = str(units)
         cm = self.ds["cell_measure"] if "cell_measure" in self.ds else None
         v = Variable(da = out, varname = da.name + "_tint", cell_measure = cm)
+        if out_bnds is not None:
+            bnd_name = v.varname+"_bnds"
+            v.ds[bnd_name] = out_bnds
+            v.ds[v.varname].attrs['bounds'] = bnd_name
         return v
 
     def stddev(self,mean=None):
@@ -294,9 +319,9 @@ class Variable():
                 units = str(units).replace("m-2","")
             else:
                 units *= Unit('m2')
-            out.attrs['units'] = str(units)
+        out.attrs['units'] = str(units)
         tm = self.ds.time_measure if "time_measure" in self.ds else None
-        v = Variable(da = out, varname = da.name + "_sint", time_measure = tm)
+        v = Variable(da = out, varname = str(da.name) + "_sint", time_measure = tm)
         return v
 
     def detrend(self,dim=['time'],degree=1):
@@ -327,6 +352,36 @@ class Variable():
         self.ds[self.varname].attrs = attrs
         return self
 
+    def cycle(self):
+        """Compute the annual cycle.
+
+        """
+        varname = self.varname
+        ds = self.ds.groupby('time.month').mean(dim='time').rename({'month':'time'})
+        tm = xr.DataArray(data=np.asarray([31,28,31,30,31,30,31,31,30,31,30,31],dtype='float'),
+                          dims=['time'],coords={'time':ds['time']})
+        cm = self.ds['cell_measure'] if 'cell_measure' in self.ds else None
+        v = Variable(da=ds[varname],varname=varname,time_measure=tm,cell_measure=cm)
+        attrs = self.ds[varname].attrs
+        if 'ilamb' not in attrs: attrs['ilamb'] = ''
+        attrs['ilamb'] += "cycle(); "
+        if 'bounds' in attrs: v.ds[attrs['bounds']] = ds[attrs['bounds']]
+        v.ds[varname].attrs = attrs
+        return v
+
+    def maxMonth(self):
+        """
+
+        """
+        assert 'time' in self.ds
+        v = self if self.ds['time'].size == 12 else self.cycle()
+        da = v.ds[self.varname]
+        da = xr.where(da.isnull().all(dim='time'),np.nan,xr.where(da.isnull(),0,da).argmax(dim='time'))
+        cm = self.ds['cell_measure'] if 'cell_measure' in self.ds else None
+        v = Variable(da = da, varname = "maxmonth", cell_measure = cm)
+        v.ds[v.varname].attrs['units'] = 'month'
+        return v
+    
     def correlation(self,v,dim):
         """Compute the correlation is the specified dimension.
 
@@ -383,6 +438,10 @@ class Variable():
             if skip in out.ds[varname].attrs: out.ds[varname].attrs.pop(skip)
         if 'ilamb' not in out.ds[varname].attrs: out.ds[varname].attrs['ilamb'] = ''
         out.ds[varname].attrs['ilamb'] += "interpolate(); "
+        if "bounds" in self.ds[varname].attrs and self.ds[varname].attrs['bounds'] in ds:
+            bnd_name = varname+"_bnds"
+            out.ds[bnd_name] = ds[self.ds[varname].attrs['bounds']]
+            out.ds[varname].attrs['bounds'] = bnd_name
         return out
    
     def _createTimeMeasure(self):
