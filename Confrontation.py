@@ -37,23 +37,65 @@ def adjust_lon(a,b):
         b.ds[b.lon_name] = b.ds[b.lon_name] % 360
         b.ds = b.ds.sortby(b.lon_name)
     elif not a360 and b360:
-        b.ds[b.lon_name] = (b.ds[b.lon_name]+180)%360-180
+        b.ds[b.lon_name] = (b.ds[b.lon_name]+180) % 360-180
         b.ds = b.ds.sortby(b.lon_name)
     return a,b
 
-def sanitize_dict(d):
+def sanitize_into_dataset(d):
     """Cleanup dictionaries for use in creation of a xarray dataset.
 
     * make sure the dataarray names match the keys of the dictionary
-    * add '_' to lat/lon dimensions if more than one unique set exists
-    * sometimes arrays get a 'land' coordinate which looks weird on plots
+    * add '_' to time/lat/lon dimensions if more than one unique set exists
+    * weed out attributes which were carried over from the source files
 
     """
+    ds = {}
+
+    # group dataarrays by unique sets of lats/lons and rename as needed
+    lats = {}; lons = {}
     for key in d:
         v = d[key]
-        #d[key].ds[d[key].varname].rename({d[key].varname:key})
+        if v.lat_name is None: continue
+        if v.lon_name is None: continue
+        lat = v.ds[v.lat_name]
+        lon = v.ds[v.lon_name]
+        if lat.size not in lats: lats[lat.size] = []
+        if lon.size not in lons: lons[lon.size] = []
+        lats[lat.size].append(key)
+        lons[lon.size].append(key)
+    assert len(lats) == len(lons)
+    lat_name = "lat"; lon_name = "lon"
+    for nlat,nlon in zip(sorted(lats.keys()),sorted(lons.keys())):
+        assert(len(set(lats[nlat]).difference(set(lons[nlon])))==0)
+        for name in lats[nlat]:
+            v = d[name]
+            da = v.ds[v.varname]
+            ds[name] = da.rename({v.lat_name:lat_name,v.lon_name:lon_name})
+        lat_name += "_"
+        lon_name += "_"
+
+    # group remaining dataaarays by unqiue sets of times and rename as needed
+    times = {}
+    for key in set(d.keys()).difference(set(ds.keys())):
+        v = d[key]
+        if 'time' not in v.ds[v.varname].dims: continue
+        t = v.ds['time']
+        if t.size not in times: times[t.size] = []
+        times[t.size].append(key)
+    t_name = "time"
+    for nt in sorted(times.keys()):
+        for name in times[nt]:
+            v = d[name]
+            da = v.ds[v.varname]
+            ds[name] = da.rename({'time':t_name})
+        t_name += "_"
         
-    return d
+    # make sure we dealt with everything
+    assert(len(set(d.keys()).difference(set(ds.keys())))==0)
+    keep = ['_FillValue','units','ilamb']
+    for name in ds: ds[name].attrs = { key:val for key,val in ds[name].attrs.items() if key in keep }
+    ds = xr.Dataset(ds)
+    return ds
     
 def ScoreBias(r0,c0,r=None,c=None,model_name="",regions=[None]):
     """
@@ -116,8 +158,8 @@ def ScoreCycle(r0,c0,r=None,c=None,model_name="",regions=[None]):
     v = r0.varname
     
     # compute cycle and month of maximum
-    rc0 = r0.cycle()
-    cc0 = c0.cycle()
+    rc0 = r0 if r0.ds['time'].size==12 else r0.cycle()
+    cc0 = c0 if c0.ds['time'].size==12 else c0.cycle()
     rmx0 = rc0.maxMonth()
     cmx0 = cc0.maxMonth()
 
@@ -146,8 +188,8 @@ def ScoreCycle(r0,c0,r=None,c=None,model_name="",regions=[None]):
     }
     df = []
     for region in regions:
-        r_plot['spaceint_of_%s_over_%s' % (v,region)] = rc0.integrateInSpace(mean=True,region=region)
-        c_plot['spaceint_of_%s_over_%s' % (v,region)] = cc0.integrateInSpace(mean=True,region=region)
+        r_plot['cycle_of_%s_over_%s' % (v,region)] = rc0.integrateInSpace(mean=True,region=region)
+        c_plot['cycle_of_%s_over_%s' % (v,region)] = cc0.integrateInSpace(mean=True,region=region)
         s = ps.integrateInSpace(mean=True,region=region)
         df.append([model_name,region,'Phase Shift','scalar',s.units(),float(s.ds[s.varname].values)])
         s = score.integrateInSpace(mean=True,region=region)
@@ -164,17 +206,20 @@ class Confrontation(object):
         unit
         regions
         master
+        path
         """
         self.source   = kwargs.get(  "source",None)
         self.variable = kwargs.get("variable",None)
         self.unit     = kwargs.get(    "unit",None)
         self.regions  = kwargs.get( "regions",[None])
         self.master   = kwargs.get(  "master",True)
+        self.path     = kwargs.get(    "path","./")
         assert self.source is not None
         if not os.path.isfile(self.source):
             msg = "Cannot find the source, tried looking here: '%s'" % self.source
             raise ValueError(msg)
-
+        if not os.path.isdir(self.path): os.makedirs(self.path)
+        
     def stageData(self,m):
         """
         
@@ -194,7 +239,7 @@ class Confrontation(object):
         """
         r0,c0 = self.stageData(m)
 
-        # initialize 
+        # initialize output containers
         rplot = {}; cplot = {}; dfm = []
 
         # bias scoring
@@ -210,14 +255,14 @@ class Confrontation(object):
         # spatial distribution scoring
         
         # write outputs
-        dfm = pd.concat([df for df in dfm if len(df)>0]).reset_index()
-        print(dfm)
+        dfm = pd.concat([df for df in dfm if len(df)>0]).reset_index(drop=True)
+        dfm.to_csv(os.path.join(self.path,"%s.csv" % m.name))        
+        ds = sanitize_into_dataset(cplot)
+        ds.to_netcdf(os.path.join(self.path,"%s.nc" % m.name))
+        if self.master:
+            ds = sanitize_into_dataset(rplot)
+            ds.to_netcdf(os.path.join(self.path,"Benchmark.nc"))
 
-        for key in cplot:
-            cplot[key].plot()
-            plt.gca().set_title(key)
-            plt.show()
-            
         return
         
         
@@ -233,13 +278,15 @@ if __name__ == "__main__":
     c = Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc",
                       variable = "gpp",
                       unit = "g m-2 d-1",
-                      regions = [None,"nhsa"])
+                      regions = [None,"nhsa"],
+                      path = "./_build/gpp/FLUXCOM")
     for m in M: c.confront(m)
 
     if 1:
         c = Confrontation(source = "/home/nate/work/ILAMB-Data/CLASS/pr.nc",
                           variable = "pr",
-                          unit = "kg m-2 d-1")
+                          unit = "kg m-2 d-1",
+                          path = "./_build/pr/CLASS/")
         for m in M: c.confront(m)
     
 
