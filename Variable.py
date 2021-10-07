@@ -293,22 +293,54 @@ class Variable():
             v.ds[v.varname].attrs['bounds'] = bnd_name
         return v
 
-    def stddev(self,mean=None):
+    def _std_time(self):
+        """Internal function for std in the time dimension.
+
         """
-        """
-        if mean is None: mean = self.integrateInTime(mean=True)
-        out = (self.ds[self.varname] - mean.ds[mean.varname])**2
-        attrs = {key:a for key,a in self.ds[self.varname].attrs.items() if ("time"         not in key and
-                                                                            "actual_range" not in key)}
-        out.attrs = attrs
+        mean = self.integrateInTime(mean=True)
+        out = (self.ds[self.varname]-mean.ds[mean.varname])**2
+        drops = ['time','actual_range']
+        attrs = {key:a for key,a in self.ds[self.varname].attrs.items() if key not in drops}
         if 'ilamb' not in out.attrs: out.attrs['ilamb'] = ''
-        out.attrs['ilamb'] += "stddev(); "
-        tm = self.ds["time_measure"] if "time_measure" in self.ds else None
-        cm = self.ds["cell_measure"] if "cell_measure" in self.ds else None
-        v = Variable(da = out, varname = self.varname + "_std", cell_measure = cm, time_measure = tm)
+        attrs['ilamb'] += "std(dim='time'); "
+        v = Variable(da = out, varname = 'none',
+                     cell_measure = self.ds["cell_measure"] if "cell_measure" in self.ds else None,
+                     time_measure = self.ds["time_measure"] if "time_measure" in self.ds else None)
+        v.ds[v.varname].attrs = attrs        
         v = v.integrateInTime(mean=True)
+        v.ds[v.varname] = np.sqrt(v.ds[v.varname])
         v.ds = v.ds.rename({v.varname:self.varname + "_std"})
         v.varname = self.varname + "_std"
+        v.ds[v.varname].attrs = attrs        
+        return v
+
+    def _std_space(self,region=None):
+        """Internal function for std in the space dimension.
+
+        """
+        mean = self.integrateInSpace(region=region,mean=True)
+        out = (self.ds[self.varname]-mean.ds[mean.varname])**2
+        drops = ['actual_range']
+        attrs = {key:a for key,a in self.ds[self.varname].attrs.items() if key not in drops}
+        if 'ilamb' not in out.attrs: out.attrs['ilamb'] = ''
+        attrs['ilamb'] += "std(dim='space'); "
+        v = Variable(da = out, varname = 'none',
+                     cell_measure = self.ds["cell_measure"] if "cell_measure" in self.ds else None,
+                     time_measure = self.ds["time_measure"] if "time_measure" in self.ds else None)
+        v.ds[v.varname].attrs = attrs        
+        v = v.integrateInSpace(region=region,mean=True)
+        v.ds[v.varname] = np.sqrt(v.ds[v.varname])
+        v.ds = v.ds.rename({v.varname:self.varname + "_std"})
+        v.varname = self.varname + "_std"
+        v.ds[v.varname].attrs = attrs        
+        return v
+    
+    def std(self,dim,region=None):
+        """
+        """
+        if dim ==  "time": v = self._std_time()
+        if dim == "space": v = self._std_space(region)
+        if v.ds[v.varname].size == 1: v = float(v.ds[v.varname])
         return v
     
     def integrateInSpace(self,region=None,mean=False):
@@ -397,26 +429,28 @@ class Variable():
         v.ds[v.varname].attrs['units'] = 'month'
         return v
     
-    def correlation(self,v,dim):
+    def correlation(self,v,dim,region=None):
         """Compute the correlation is the specified dimension.
 
         """
-        # FIX: need to check that v is compatible with self
         self,v = align_latlon(self,v)
-        if type(dim) is not type([]): dim = [dim]
-        assert set(dim).issubset(set(self.ds[self.varname].dims))
-        assert set(dim).issubset(set(   v.ds[   v.varname].dims))
-        r = xr.corr(self.ds[self.varname],v.ds[v.varname],dim=dim)
-        dim = ["'%s'" % d for d in dim]
+        dims = []
+        if dim ==  'time': dims = ['time']
+        if dim == 'space': dims = [self.lat_name,self.lon_name]
+        sds = self.ds if region is None else ilamb_regions.getMask(region,self)    
+        vds =    v.ds if region is None else ilamb_regions.getMask(region,   v)    
+        r = xr.corr(sds[self.varname],vds[v.varname],dim=dims)
+        dims = ["'%s'" % d for d in dims]
         attrs = {}
-        attrs['ilamb'] = "correlation(%s,%s,dim=[%s]); " % (self.varname,v.varname,",".join(dim))
+        attrs['ilamb'] = "correlation(%s,%s,dim=[%s]); " % (self.varname,v.varname,",".join(dims))
         r.attrs = attrs
         tm = self.ds['time_measure'] if ('time_measure' in self.ds and 'time' in r.dims) else None
         cm = self.ds['cell_measure'] if ('cell_measure' in self.ds and (self.lat_name in r.dims and
                                                                         self.lon_name in r.dims)) else None
         r = Variable(da = r, varname = "corr_%s_%s" % (self.varname,v.varname),
                      cell_measure = cm, time_measure = tm)
-        return r 
+        if r.ds[r.varname].size == 1: r = float(r.ds[r.varname])
+        return r
 
     def nestSpatialGrids(self,*args):
         """

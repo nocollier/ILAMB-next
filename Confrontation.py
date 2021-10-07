@@ -117,17 +117,16 @@ def overall_score(df):
 
 def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
     """
-    r0 - reference in the original grid
-    c0 - comparison in the original grid
+
     """
     v = r0.varname
     
     # period means on original grids
-    rm0 = r0.integrateInTime(mean=True)
-    cm0 = c0.integrateInTime(mean=True)
+    rm0 = r0.integrateInTime(mean=True) if r0.temporal() else r0
+    cm0 = c0.integrateInTime(mean=True) if c0.temporal() else c0
 
     # if we have temporal data, the normalizer is the std
-    norm0 = r0.stddev() if r0.ds['time'].size > 1 else rm0
+    norm0 = r0.std(dim='time') if r0.ds['time'].size > 1 else rm0
 
     # interpolate to a nested grid
     rm,cm,norm = rm0.nestSpatialGrids(cm0,norm0)
@@ -180,7 +179,7 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
     if ('time' not in c0.ds[r0.varname].dims) or (c0.ds['time'].size < 12): return {},{},[]
 
     # get normalizer and regrid
-    norm0 = r0.stddev()
+    norm0 = r0.std(dim='time')
     r,c,norm = r0.nestSpatialGrids(c0,norm0)
 
     # do we have reference uncertainties?
@@ -268,10 +267,20 @@ def ScoreSpatialDistribution(r0,c0,r=None,c=None,regions=[None]):
     """
 
     """
-    if 'time' in r0.ds[r0.varname].dims: r0 = r0.integrateInTime(mean=True)
-    if 'time' in c0.ds[c0.varname].dims: c0 = c0.integrateInTime(mean=True)
-
-    return {},{},[]
+    if r0.temporal(): r0 = r0.integrateInTime(mean=True)
+    if c0.temporal(): c0 = c0.integrateInTime(mean=True)
+    r,c = pick_grid_aligned(r0,c0,r,c)
+    df = []
+    for region in regions:
+        std0 = r.std(dim='space',region=region)
+        std  = c.std(dim='space',region=region)/std0
+        corr = r.correlation(c,'space',region=region)
+        score = 2*(1+corr)/((std+1/std)**2)
+        df.append(['model',str(region),'Spatial Normalized Standard Deviation','scalar','1',std])
+        df.append(['model',str(region),'Spatial Correlation'                  ,'scalar','1',corr])
+        df.append(['model',str(region),'Spatial Distribution Score'           ,'score' ,'1',score])
+    df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])        
+    return {},{},df
 
 class Confrontation(object):
 
@@ -300,8 +309,7 @@ class Confrontation(object):
         """
         
         """
-        r = Variable(filename = self.source,
-                     varname  = self.variable)
+        r = Variable(filename=self.source,varname=self.variable)
         if self.unit is not None: r.convert(self.unit)
         t0,tf = r.timeBounds()
         c = m.getVariable(self.variable,t0=t0,tf=tf)
@@ -311,11 +319,16 @@ class Confrontation(object):
     
     def confront(self,m,**kwargs):
         """
-
+        skip_bias
+        skip_rmse
+        skip_cycle
+        skip_sd
         """
         # options
+        skip_bias  = kwargs.get( 'skip_bias',False)
         skip_rmse  = kwargs.get( 'skip_rmse',False)
         skip_cycle = kwargs.get('skip_cycle',False)
+        skip_sd    = kwargs.get(   'skip_sd',False)
                 
         # initialize, detect what analyses are inappropriate
         r0,c0 = self.stageData(m)
@@ -325,25 +338,30 @@ class Confrontation(object):
         rplot = {}; cplot = {}; dfm = []
 
         # bias scoring
-        rp,cp,df = ScoreBias(r0,c0,regions=self.regions)
-        rplot.update(rp); cplot.update(cp); dfm.append(df)
+        if not skip_bias:
+            rp,cp,df = ScoreBias(r0,c0,regions=self.regions)
+            rplot.update(rp); cplot.update(cp); dfm.append(df)
 
         # rmse scoring
-        rp,cp,df = ScoreRMSE(r0,c0,regions=self.regions)
-        rplot.update(rp); cplot.update(cp); dfm.append(df)
+        if not skip_rmse:
+            rp,cp,df = ScoreRMSE(r0,c0,regions=self.regions)
+            rplot.update(rp); cplot.update(cp); dfm.append(df)
                 
         # cycle scoring
-        rp,cp,df = ScoreCycle(r0,c0,regions=self.regions)
-        rplot.update(rp); cplot.update(cp); dfm.append(df)
+        if not skip_cycle:
+            rp,cp,df = ScoreCycle(r0,c0,regions=self.regions)
+            rplot.update(rp); cplot.update(cp); dfm.append(df)
 
         # spatial distribution scoring
-        ri = rplot['timeint_of_%s' % self.variable]
-        ci = cplot['timeint_of_%s' % self.variable]
-        ScoreSpatialDistribution(ri,ci,regions=self.regions)
-        rplot.update(rp); cplot.update(cp); dfm.append(df)
+        if not skip_sd:
+            name = 'timeint_of_%s' % self.variable
+            ri = rplot[name] if name in rplot else r0
+            ci = cplot[name] if name in cplot else c0
+            rp,cp,df = ScoreSpatialDistribution(ri,ci,regions=self.regions)
+            rplot.update(rp); cplot.update(cp); dfm.append(df)
         
         # compute overall score and output
-        dfm = pd.concat([df for df in dfm if len(df)>0]).reset_index(drop=True)
+        dfm = pd.concat([df for df in dfm if len(df)>0],ignore_index=True)
         dfm.Model[dfm.Model=='model'] = m.name
         dfm = overall_score(dfm)
         dfm.to_csv(os.path.join(self.path,"%s.csv" % m.name),index=False)
@@ -358,7 +376,8 @@ class Confrontation(object):
         
 if __name__ == "__main__":
     from ModelResult import ModelResult
-
+    import time
+    
     M = [ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CESM2"  ,name="CESM2"  ),
          ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5",name="CanESM5")]
     for m in M:
@@ -370,13 +389,25 @@ if __name__ == "__main__":
                       unit = "g m-2 d-1",
                       regions = [None,"nhsa"],
                       path = "./_build/gpp/FLUXCOM")
-    for m in M: c.confront(m)
+    for m in M:
+        t0 = time.time()
+        print(m.name,c.variable,end=' ')
+        c.confront(m)
+        dt = time.time()-t0
+        print("%.0f" % dt)
 
+                
     if 1:
         c = Confrontation(source = "/home/nate/work/ILAMB-Data/CLASS/pr.nc",
                           variable = "pr",
                           unit = "kg m-2 d-1",
                           path = "./_build/pr/CLASS/")
-        for m in M: c.confront(m)
+        for m in M:
+            t0 = time.time()
+            print(m.name,c.variable,end=' ')
+            c.confront(m)
+            dt = time.time()-t0
+            print("%.0f" % dt)
+
     
 
