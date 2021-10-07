@@ -143,6 +143,10 @@ class Variable():
         u = Unit( self.units())/Unit(other.units())
         out.ds[out.varname].attrs['units'] = str(u)
         return out
+
+    def temporal(self):
+        if 'time' in self.ds[self.varname].dims: return True
+        return False
     
     def timeBounds(self):
         """Return the time extent of the dataset/array
@@ -154,6 +158,16 @@ class Variable():
                 t = self.ds[t.attrs['bounds']]
         return t.min(),t.max()
 
+    def rmse(self,other):
+        """
+
+        """
+        out = other-self
+        out.ds[out.varname] *= out.ds[out.varname]
+        out = out.integrateInTime(mean=True)
+        out.ds[out.varname] = np.sqrt(out.ds[out.varname])
+        return out
+        
     def uncertainty(self):
         """
 
@@ -271,7 +285,8 @@ class Variable():
             units *= Unit("d")
             out.attrs['units'] = str(units)
         cm = self.ds["cell_measure"] if "cell_measure" in self.ds else None
-        v = Variable(da = out, varname = da.name + "_tint", cell_measure = cm)
+        name = "none" if da.name is None else da.name
+        v = Variable(da = out, varname = name + "_tint", cell_measure = cm)
         if out_bnds is not None:
             bnd_name = v.varname+"_bnds"
             v.ds[bnd_name] = out_bnds

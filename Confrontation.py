@@ -96,10 +96,29 @@ def sanitize_into_dataset(d):
     for name in ds: ds[name].attrs = { key:val for key,val in ds[name].attrs.items() if key in keep }
     ds = xr.Dataset(ds)
     return ds
-    
-def ScoreBias(r0,c0,r=None,c=None,model_name="",regions=[None]):
-    """
 
+def overall_score(df):
+    """Adds a overall score as the mean of all scores in the input dataframe by region.
+
+    """
+    os = df[df.ScalarType=='score']
+    model = os.Model.unique()[0]
+    nr = len(os.Region.unique())
+    os = os.groupby('Region').mean()
+    df = pd.concat([df,pd.DataFrame({'Model'      : [model]*nr,
+                                     'Region'     : list(os.index),
+                                     'ScalarName' : ['Overall Score']*nr,
+                                     'ScalarType' : ['score']*nr,
+                                     'Units'      : ['1']*nr,
+                                     'Data'       : list(os.Data)},
+                                    columns=['Model','Region','ScalarName','ScalarType','Units','Data'])],
+                   ignore_index=True)
+    return df
+
+def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
+    """
+    r0 - reference in the original grid
+    c0 - comparison in the original grid
     """
     v = r0.varname
     
@@ -119,23 +138,23 @@ def ScoreBias(r0,c0,r=None,c=None,model_name="",regions=[None]):
     un = 0 if ru is None else ru.ds[ru.varname]
     
     # compute the bias score
-    eps  = cm-rm
+    eps  = cm-rm    
     eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)
     eps.ds[eps.varname].attrs['units'] = cm.units()
-    eps /= norm    
+    eps /= norm
     eps.ds[eps.varname] = np.exp(-eps.ds[eps.varname])
 
     # populate scalars over regions
     df = []
     for region in regions:
         s = rm0.integrateInSpace(mean=True,region=region)
-        df.append(['Benchmark',region,'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
+        df.append(['Benchmark',str(region),'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
         s = cm0.integrateInSpace(mean=True,region=region)
-        df.append([model_name,region,'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
+        df.append(['model',str(region),'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
         s = bias.integrateInSpace(mean=True,region=region)
-        df.append([model_name,region,'Bias','scalar',s.units(),float(s.ds[s.varname].values)])
+        df.append(['model',str(region),'Bias','scalar',s.units(),float(s.ds[s.varname].values)])
         s = eps.integrateInSpace(mean=True,region=region)
-        df.append([model_name,region,'Bias Score','score',s.units(),float(s.ds[s.varname].values)])
+        df.append(['model',str(region),'Bias Score','score',s.units(),float(s.ds[s.varname].values)])
     df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])
 
     # collect output for intermediate files
@@ -150,7 +169,55 @@ def ScoreBias(r0,c0,r=None,c=None,model_name="",regions=[None]):
     }
     return r_plot,c_plot,df
 
-def ScoreCycle(r0,c0,r=None,c=None,model_name="",regions=[None]):
+def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
+    """
+
+    """
+    v = r0.varname
+    
+    # validity checks
+    if ('time' not in r0.ds[r0.varname].dims) or (r0.ds['time'].size < 12): return {},{},[]
+    if ('time' not in c0.ds[r0.varname].dims) or (c0.ds['time'].size < 12): return {},{},[]
+
+    # get normalizer and regrid
+    norm0 = r0.stddev()
+    r,c,norm = r0.nestSpatialGrids(c0,norm0)
+
+    # do we have reference uncertainties?
+    ru = r.uncertainty()
+    un = 0 if ru is None else ru.ds[ru.varname]
+
+    # compute the RMSE error and score
+    rmse = r.rmse(c)
+    r = r.detrend(degree=0)
+    c = c.detrend(degree=0)
+    eps = c-r
+    del c,r
+    eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)**2
+    eps.ds[eps.varname].attrs['units'] = "1"
+    eps = eps.integrateInTime(mean=True)
+    eps /= norm 
+    eps.ds[eps.varname] = np.exp(-eps.ds[eps.varname])    
+    eps.ds[eps.varname].attrs['units'] = "1"
+    
+    # collect output for intermediate files
+    r_plot = {}
+    c_plot = {
+        'rmse_map_of_%s'      % v: rmse,
+        'rmsescore_map_of_%s' % v: eps
+    }
+    df = []
+    for region in regions:
+        r_plot['spaceint_of_%s_over_%s' % (v,region)] = r0.integrateInSpace(mean=True,region=region)
+        c_plot['spaceint_of_%s_over_%s' % (v,region)] = c0.integrateInSpace(mean=True,region=region)
+        s = rmse.integrateInSpace(mean=True,region=region)
+        df.append(['model',str(region),'RMSE','scalar',s.units(),float(s.ds[s.varname].values)])
+        s = eps.integrateInSpace(mean=True,region=region)
+        df.append(['model',str(region),'RMSE Score','score',s.units(),float(s.ds[s.varname].values)])
+    df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])        
+    return r_plot,c_plot,df
+
+def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
     """
 
     """
@@ -191,12 +258,21 @@ def ScoreCycle(r0,c0,r=None,c=None,model_name="",regions=[None]):
         r_plot['cycle_of_%s_over_%s' % (v,region)] = rc0.integrateInSpace(mean=True,region=region)
         c_plot['cycle_of_%s_over_%s' % (v,region)] = cc0.integrateInSpace(mean=True,region=region)
         s = ps.integrateInSpace(mean=True,region=region)
-        df.append([model_name,region,'Phase Shift','scalar',s.units(),float(s.ds[s.varname].values)])
+        df.append(['model',str(region),'Phase Shift','scalar',s.units(),float(s.ds[s.varname].values)])
         s = score.integrateInSpace(mean=True,region=region)
-        df.append([model_name,region,'Seasonal Cycle Score','score',s.units(),float(s.ds[s.varname].values)])
+        df.append(['model',str(region),'Seasonal Cycle Score','score',s.units(),float(s.ds[s.varname].values)])
     df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])        
     return r_plot,c_plot,df
-    
+
+def ScoreSpatialDistribution(r0,c0,r=None,c=None,regions=[None]):
+    """
+
+    """
+    if 'time' in r0.ds[r0.varname].dims: r0 = r0.integrateInTime(mean=True)
+    if 'time' in c0.ds[c0.varname].dims: c0 = c0.integrateInTime(mean=True)
+
+    return {},{},[]
+
 class Confrontation(object):
 
     def __init__(self,**kwargs):
@@ -233,43 +309,57 @@ class Confrontation(object):
         r,c = adjust_lon(r,c)
         return r,c
     
-    def confront(self,m):
+    def confront(self,m,**kwargs):
         """
 
         """
+        # options
+        skip_rmse  = kwargs.get( 'skip_rmse',False)
+        skip_cycle = kwargs.get('skip_cycle',False)
+                
+        # initialize, detect what analyses are inappropriate
         r0,c0 = self.stageData(m)
-
-        # initialize output containers
+        if not r0.temporal():
+            skip_rmse  = True
+            skip_cycle = True
         rplot = {}; cplot = {}; dfm = []
 
         # bias scoring
-        rp,cp,df = ScoreBias(r0,c0,model_name=m.name,regions=self.regions)
+        rp,cp,df = ScoreBias(r0,c0,regions=self.regions)
         rplot.update(rp); cplot.update(cp); dfm.append(df)
 
         # rmse scoring
-        
+        rp,cp,df = ScoreRMSE(r0,c0,regions=self.regions)
+        rplot.update(rp); cplot.update(cp); dfm.append(df)
+                
         # cycle scoring
-        rp,cp,df = ScoreCycle(r0,c0,model_name=m.name,regions=self.regions)
+        rp,cp,df = ScoreCycle(r0,c0,regions=self.regions)
         rplot.update(rp); cplot.update(cp); dfm.append(df)
 
         # spatial distribution scoring
+        ri = rplot['timeint_of_%s' % self.variable]
+        ci = cplot['timeint_of_%s' % self.variable]
+        ScoreSpatialDistribution(ri,ci,regions=self.regions)
+        rplot.update(rp); cplot.update(cp); dfm.append(df)
         
-        # write outputs
+        # compute overall score and output
         dfm = pd.concat([df for df in dfm if len(df)>0]).reset_index(drop=True)
-        dfm.to_csv(os.path.join(self.path,"%s.csv" % m.name))        
+        dfm.Model[dfm.Model=='model'] = m.name
+        dfm = overall_score(dfm)
+        dfm.to_csv(os.path.join(self.path,"%s.csv" % m.name),index=False)
+
+        # output maps and curves
         ds = sanitize_into_dataset(cplot)
         ds.to_netcdf(os.path.join(self.path,"%s.nc" % m.name))
         if self.master:
             ds = sanitize_into_dataset(rplot)
             ds.to_netcdf(os.path.join(self.path,"Benchmark.nc"))
-
-        return
         
         
 if __name__ == "__main__":
     from ModelResult import ModelResult
 
-    M = [ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CESM2",name="CESM2"),
+    M = [ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CESM2"  ,name="CESM2"  ),
          ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5",name="CanESM5")]
     for m in M:
         m.findFiles()
