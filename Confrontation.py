@@ -389,47 +389,25 @@ if __name__ == "__main__":
         m.findFiles()
         m.getGridInformation()
 
-    #########################################################################
-        
-    c = Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXNET2015/gpp.nc",
-                      variable = "gpp",
-                      unit = "g m-2 d-1",
-                      path = "./_build/gpp/FLUXNET2015")
-    for m in M:
-        t0 = time.time()
-        print("%10s %5s" % (m.name,c.variable),end=' ',flush=True)
-        c.confront(m)
-        dt = time.time()-t0
-        print("%.0f" % dt)
-
-    #########################################################################
-    
-    if 1:
-        c = Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc",
-                          variable = "gpp",
-                          unit = "g m-2 d-1",
-                          regions = [None,"nhsa"],
-                          path = "./_build/gpp/FLUXCOM")
+    C = [Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXNET2015/gpp.nc",
+                       variable = "gpp",
+                       unit = "g m-2 d-1",
+                       regions = [None,"nhsa"],
+                       path = "./_build/gpp/FLUXNET2015"),
+         Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc",
+                       variable = "gpp",
+                       unit = "g m-2 d-1",
+                       regions = [None,"nhsa"],
+                       path = "./_build/gpp/FLUXCOM"),
+         Confrontation(source = "/home/nate/work/ILAMB-Data/CLASS/pr.nc",
+                       variable = "pr",
+                       unit = "kg m-2 d-1",
+                       path = "./_build/pr/CLASS/")]
+    for c in C:
+        print(c.source,c.variable)
         for m in M:
             t0 = time.time()
-            print("%10s %5s" % (m.name,c.variable),end=' ',flush=True)
+            print("  %10s" % (m.name),end=' ',flush=True)
             c.confront(m)
             dt = time.time()-t0
             print("%.0f" % dt)
-
-    #########################################################################
-    
-    if 0:
-        c = Confrontation(source = "/home/nate/work/ILAMB-Data/CLASS/pr.nc",
-                          variable = "pr",
-                          unit = "kg m-2 d-1",
-                          path = "./_build/pr/CLASS/")
-        for m in M:
-            t0 = time.time()
-            print("%10s %5s" % (m.name,c.variable),end=' ',flush=True)
-            c.confront(m)
-            dt = time.time()-t0
-            print("%.0f" % dt)
-
-    
-

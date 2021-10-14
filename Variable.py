@@ -20,20 +20,31 @@ def align_latlon(a,b):
         return a,b
     raise ValueError("Could not align")
 
-def extents(da):
+def extents_space(da,lat_name,lon_name):
     """Find the extent of the non-null data.
 
     """
     nl = (da.isnull()==False)
-    lat = np.where(nl.sum('lon')>0)[0]
-    lon = np.where(nl.sum('lat')>0)[0]
+    lat = np.where(nl.sum(lon_name)>0)[0]
+    lon = np.where(nl.sum(lat_name)>0)[0]
     return np.asarray([float(da.lon[lon[0]]),float(da.lon[lon[-1]]),float(da.lat[lat[0]]),float(da.lat[lat[-1]])])
+
+def extents_sites(da,lat,lon):
+    """Find the extent of the non-null data.
+
+    """
+    nl = (da.isnull()==False)
+    sdim = find_site_dimension(da)
+    dims = set(da.dims).difference(sdim)
+    if dims: nl = nl.any(dims)
+    ext = [float(lon[nl].min()),float(lon[nl].max()),float(lat[nl].min()),float(lat[nl].max())]
+    return np.asarray(ext)
 
 def pick_projection(extents):
     """Given plot extents choose projection.
 
     """
-    if (extents[1]-extents[0]) > 330:
+    if (extents[1]-extents[0]) > 300:
         proj = ccrs.Robinson(central_longitude=0)
         if (extents[2] >   0) and (extents[3] > 75):
             proj = ccrs.Orthographic(central_latitude=+90,central_longitude=0)
@@ -194,7 +205,8 @@ class Variable():
         if self.spatial(): return False
         sdim = find_site_dimension(self.ds[self.varname])
         if len(sdim) > 1:
-            raise ValueError(",".join([str(s) for s in sdim]))
+            msg = "Ambiguous site dimensions found [%s]" % (",".join([str(s) for s in sdim]))
+            raise ValueError(msg)
         if sdim: return True
     
     def timeBounds(self):
@@ -286,25 +298,11 @@ class Variable():
         da = self.ds[self.varname].sel(coords,method='nearest').assign_coords(coords)
         v = Variable(da = da, varname = str(da.name), time_measure = tm)
         return v
-        
+
     def plot(self,**kwargs):
         """
         """
-        region = kwargs.get("region",None)
-        ds = self.ds
-        if region is not None:
-            kwargs.pop("region")
-            ds = ilamb_regions.getMask(region,self)
-        da = ds[self.varname]
-        if da.ndim == 2:
-            if "cell_measure" in ds: da = xr.where(ds['cell_measure']<1,np.nan,da)
-            ext = extents(da)
-            proj = pick_projection(ext)
-            fig,ax = plt.subplots(dpi=200,
-                                  tight_layout=kwargs.pop('tight_layout') if 'tight_layout' in kwargs else None,
-                                  figsize=kwargs.pop('figsize') if 'figsize' in kwargs else None,
-                                  subplot_kw={'projection':proj})
-            p = da.plot(ax=ax,transform=ccrs.PlateCarree(),**kwargs)
+        def _finalize_plot(ax,ext):
             ax.add_feature(cfeature.NaturalEarthFeature('physical','land','110m',
                                                         edgecolor='face',
                                                         facecolor='0.875'),zorder=-1)
@@ -322,6 +320,35 @@ class Variable():
                 ext[0] -= dx; ext[1] += dx
                 ext[2] -= dy; ext[3] += dy
             ax.set_extent(ext,ccrs.PlateCarree())
+            return ax
+        
+        region = kwargs.get("region",None)
+        ds = self.ds
+        if region is not None:
+            kwargs.pop("region")
+            ds = ilamb_regions.getMask(region,self)
+        da = ds[self.varname]
+        if not self.temporal() and self.spatial():
+            if "cell_measure" in ds: da = xr.where(ds['cell_measure']<1,np.nan,da)
+            ext = extents_space(da)
+            proj = pick_projection(ext)
+            fig,ax = plt.subplots(dpi=200,
+                                  tight_layout=kwargs.pop('tight_layout') if 'tight_layout' in kwargs else None,
+                                  figsize=kwargs.pop('figsize') if 'figsize' in kwargs else None,
+                                  subplot_kw={'projection':proj})
+            p = da.plot(ax=ax,transform=ccrs.PlateCarree(),**kwargs)
+            ax = _finalize_plot(ax,ext)
+        elif not self.temporal() and self.sites():
+            if self.lat_name is None or self.lon_name is None: return
+            ext = extents_sites(da,self.ds[self.lat_name],self.ds[self.lon_name])
+            proj = pick_projection(ext)
+            fig,ax = plt.subplots(dpi=200,
+                                  tight_layout=kwargs.pop('tight_layout') if 'tight_layout' in kwargs else None,
+                                  figsize=kwargs.pop('figsize') if 'figsize' in kwargs else None,
+                                  subplot_kw={'projection':proj})
+            p = ax.scatter(self.ds[self.lon_name],self.ds[self.lat_name],c=self.ds[self.varname],
+                           transform=ccrs.PlateCarree(),**kwargs)
+            ax = _finalize_plot(ax,ext)
         else:
             da.plot(**kwargs)
             
