@@ -120,10 +120,11 @@ def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
 
     """
     v = r0.varname
+    sdim = "site" if r0.sites() else "space"
     
     # period means on original grids
-    rm0 = r0.integrateInTime(mean=True) if r0.temporal() else r0
-    cm0 = c0.integrateInTime(mean=True) if c0.temporal() else c0
+    rm0 = r0.integrate(dim='time',mean=True) if r0.temporal() else r0
+    cm0 = c0.integrate(dim='time',mean=True) if c0.temporal() else c0
 
     # if we have temporal data, the normalizer is the std
     norm0 = r0.std(dim='time') if r0.ds['time'].size > 1 else rm0
@@ -146,13 +147,13 @@ def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
     # populate scalars over regions
     df = []
     for region in regions:
-        s = rm0.integrateInSpace(mean=True,region=region)
+        s = rm0.integrate(dim=sdim,mean=True,region=region)
         df.append(['Benchmark',str(region),'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
-        s = cm0.integrateInSpace(mean=True,region=region)
+        s = cm0.integrate(dim=sdim,mean=True,region=region)
         df.append(['model',str(region),'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
-        s = bias.integrateInSpace(mean=True,region=region)
+        s = bias.integrate(dim=sdim,mean=True,region=region)
         df.append(['model',str(region),'Bias','scalar',s.units(),float(s.ds[s.varname].values)])
-        s = eps.integrateInSpace(mean=True,region=region)
+        s = eps.integrate(dim=sdim,mean=True,region=region)
         df.append(['model',str(region),'Bias Score','score',s.units(),float(s.ds[s.varname].values)])
     df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])
 
@@ -173,10 +174,10 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
 
     """
     v = r0.varname
+    sdim = "site" if r0.sites() else "space"
     
     # validity checks
-    if ('time' not in r0.ds[r0.varname].dims) or (r0.ds['time'].size < 12): return {},{},[]
-    if ('time' not in c0.ds[r0.varname].dims) or (c0.ds['time'].size < 12): return {},{},[]
+    if r0.ds['time'].size < 12: return {},{},[]
 
     # get normalizer and regrid
     norm0 = r0.std(dim='time')
@@ -194,8 +195,8 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
     del c,r
     eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)**2
     eps.ds[eps.varname].attrs['units'] = "1"
-    eps = eps.integrateInTime(mean=True)
-    eps /= norm 
+    eps = eps.integrate(dim='time',mean=True)
+    eps /= norm
     eps.ds[eps.varname] = np.exp(-eps.ds[eps.varname])    
     eps.ds[eps.varname].attrs['units'] = "1"
     
@@ -207,11 +208,11 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
     }
     df = []
     for region in regions:
-        r_plot['spaceint_of_%s_over_%s' % (v,region)] = r0.integrateInSpace(mean=True,region=region)
-        c_plot['spaceint_of_%s_over_%s' % (v,region)] = c0.integrateInSpace(mean=True,region=region)
-        s = rmse.integrateInSpace(mean=True,region=region)
+        r_plot['spaceint_of_%s_over_%s' % (v,region)] = r0.integrate(sdim,mean=True,region=region)
+        c_plot['spaceint_of_%s_over_%s' % (v,region)] = c0.integrate(sdim,mean=True,region=region)
+        s = rmse.integrate(sdim,mean=True,region=region)
         df.append(['model',str(region),'RMSE','scalar',s.units(),float(s.ds[s.varname].values)])
-        s = eps.integrateInSpace(mean=True,region=region)
+        s = eps.integrate(sdim,mean=True,region=region)
         df.append(['model',str(region),'RMSE Score','score',s.units(),float(s.ds[s.varname].values)])
     df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])        
     return r_plot,c_plot,df
@@ -222,6 +223,7 @@ def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
     """
     if (r0.ds['time'].size < 12 or c0.ds['time'].size < 12): return {},{},[]
     v = r0.varname
+    sdim = "site" if r0.sites() else "space"
     
     # compute cycle and month of maximum
     rc0 = r0 if r0.ds['time'].size==12 else r0.cycle()
@@ -254,11 +256,11 @@ def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
     }
     df = []
     for region in regions:
-        r_plot['cycle_of_%s_over_%s' % (v,region)] = rc0.integrateInSpace(mean=True,region=region)
-        c_plot['cycle_of_%s_over_%s' % (v,region)] = cc0.integrateInSpace(mean=True,region=region)
-        s = ps.integrateInSpace(mean=True,region=region)
+        r_plot['cycle_of_%s_over_%s' % (v,region)] = rc0.integrate(sdim,mean=True,region=region)
+        c_plot['cycle_of_%s_over_%s' % (v,region)] = cc0.integrate(sdim,mean=True,region=region)
+        s = ps.integrate(sdim,mean=True,region=region)
         df.append(['model',str(region),'Phase Shift','scalar',s.units(),float(s.ds[s.varname].values)])
-        s = score.integrateInSpace(mean=True,region=region)
+        s = score.integrate(sdim,mean=True,region=region)
         df.append(['model',str(region),'Seasonal Cycle Score','score',s.units(),float(s.ds[s.varname].values)])
     df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])        
     return r_plot,c_plot,df
@@ -267,8 +269,8 @@ def ScoreSpatialDistribution(r0,c0,r=None,c=None,regions=[None]):
     """
 
     """
-    if r0.temporal(): r0 = r0.integrateInTime(mean=True)
-    if c0.temporal(): c0 = c0.integrateInTime(mean=True)
+    if r0.temporal(): r0 = r0.integrate(dim='time',mean=True)
+    if c0.temporal(): c0 = c0.integrate(dim='time',mean=True)
     r,c = pick_grid_aligned(r0,c0,r,c)
     df = []
     for region in regions:
@@ -315,6 +317,7 @@ class Confrontation(object):
         c = m.getVariable(self.variable,t0=t0,tf=tf)
         c.convert(r.units())
         r,c = adjust_lon(r,c)
+        if r.sites() and c.spatial(): c = c.extractSites(r)
         return r,c
     
     def confront(self,m,**kwargs):
@@ -335,6 +338,8 @@ class Confrontation(object):
         if not r0.temporal():
             skip_rmse  = True
             skip_cycle = True
+        if not r0.spatial():
+            skip_sd = True
         rplot = {}; cplot = {}; dfm = []
 
         # bias scoring
@@ -384,27 +389,44 @@ if __name__ == "__main__":
         m.findFiles()
         m.getGridInformation()
 
-    c = Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc",
+    #########################################################################
+        
+    c = Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXNET2015/gpp.nc",
                       variable = "gpp",
                       unit = "g m-2 d-1",
-                      regions = [None,"nhsa"],
-                      path = "./_build/gpp/FLUXCOM")
+                      path = "./_build/gpp/FLUXNET2015")
     for m in M:
         t0 = time.time()
-        print(m.name,c.variable,end=' ')
+        print("%10s %5s" % (m.name,c.variable),end=' ',flush=True)
         c.confront(m)
         dt = time.time()-t0
         print("%.0f" % dt)
 
-                
+    #########################################################################
+    
     if 1:
+        c = Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc",
+                          variable = "gpp",
+                          unit = "g m-2 d-1",
+                          regions = [None,"nhsa"],
+                          path = "./_build/gpp/FLUXCOM")
+        for m in M:
+            t0 = time.time()
+            print("%10s %5s" % (m.name,c.variable),end=' ',flush=True)
+            c.confront(m)
+            dt = time.time()-t0
+            print("%.0f" % dt)
+
+    #########################################################################
+    
+    if 0:
         c = Confrontation(source = "/home/nate/work/ILAMB-Data/CLASS/pr.nc",
                           variable = "pr",
                           unit = "kg m-2 d-1",
                           path = "./_build/pr/CLASS/")
         for m in M:
             t0 = time.time()
-            print(m.name,c.variable,end=' ')
+            print("%10s %5s" % (m.name,c.variable),end=' ',flush=True)
             c.confront(m)
             dt = time.time()-t0
             print("%.0f" % dt)

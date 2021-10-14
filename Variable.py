@@ -42,7 +42,34 @@ def pick_projection(extents):
     else:
         proj = ccrs.PlateCarree(central_longitude=extents[:2].mean())
     return proj
-        
+
+def find_site_dimension(da):
+    """
+
+    """
+    sdim = [d for d in da.dims if ((d not in da.coords) or np.issubdtype(da[d],np.integer))]
+    return sdim
+
+def move_coordinates(ds,varname):
+    """Move coordinates from the dataset to the dataarray as appropriate.
+
+    When reading in site data, the data site dimension is a scalar
+    integer and usually there are one-dimensional arrays of the size
+    of the number of data sites that contain lat/lon and other
+    supplementary information. Find these and pass them as coordinates
+    of the variable data array. This will enable logic internally to
+    choose when a variable is spatial (lat/lon are dimensions) and
+    when it is sites (lat/lon are coordinates only).
+
+    """
+    da = ds[varname]
+    candidate_dims = [d for d in da.dims if d not in ds]
+    coords = { key: ds[key] for key in ds if (ds[key].ndim==1 and
+                                              ds[key].dims[0] in candidate_dims) }
+    ds = ds.drop(coords.keys())
+    ds[varname] = ds[varname].assign_coords(coords)
+    return ds
+
 class Variable():
     """Extends an xarray Dataset/Dataarray to track quantities we need to
        interpolation as well as provides implementations of
@@ -51,19 +78,26 @@ class Variable():
 
     """
     def __init__(self,**kwargs):
-    
+        """
+        varname
+        filename
+        da
+        cell_measure
+        time_measure
+        """
         # Construction options, either 'filename' or 'da' must be specified
         self.ds = None
-        self.varname  = kwargs.get( "varname",None)  # the name of the variable
-        self.filename = kwargs.get("filename",None)  # the filename of the variable
+        self.varname  = kwargs.get( "varname","unnamed")
+        self.filename = kwargs.get("filename",None)
         if self.filename is not None:
             self.ds = xr.open_dataset(self.filename)
+            self.ds = move_coordinates(self.ds,self.varname)
         else:
             da = kwargs.get("da",None)
             assert da is not None
             self.ds = xr.Dataset({self.varname:da})
             self.ds[self.varname].name = self.varname
-        
+            
         # Measures may be given in the constructor, if not then we build them
         if 'time' in self.ds[self.varname].dims:
             dt = kwargs.get("time_measure",None)
@@ -76,38 +110,39 @@ class Variable():
         t0 = kwargs.get("t0",None)
         tf = kwargs.get("tf",None)
         if 'time' in self.ds[self.varname].dims: self.ds = self.ds.sel(time=slice(t0,tf))
-
+        
         # Is there a 'lat' or 'lon' dimension? If so, get the names
         da = self.ds[self.varname]
-        self.lat_name = [d for d in da.dims if ('lat' in d.lower() or 'j' == d or 'y' == d)]
-        self.lon_name = [d for d in da.dims if ('lon' in d.lower() or 'i' == d or 'x' == d)]
+        self.lat_name = [d for d in da.dims if d.lower().startswith('lat')]
+        self.lon_name = [d for d in da.dims if d.lower().startswith('lon')]
         if len(self.lat_name) > 1 or len(self.lon_name) > 1:
             msg  = "Ambiguity in which data array dimensions are spatial coordinates: "
             msg += "lat = ['%s'], lon = ['%s']" % (",".join(self.lat_name),",".join(self.lon_name))
-            raise ValueError(msg)
-        
-        # If the data types of these 'lat' and 'lon' dimensions are
-        # integers, they are index sets and therefore the grid is
-        # irregular, for now just flag
+            raise ValueError(msg)        
         self.lat_name = self.lat_name[0] if self.lat_name else None
         self.lon_name = self.lon_name[0] if self.lon_name else None
-        self.is_regular = True
-        if self.lat_name and self.lon_name:
-            if (np.issubdtype(da[self.lat_name].dtype,np.integer) and
-                np.issubdtype(da[self.lon_name].dtype,np.integer)):
-                self.is_regular = False
+
+        # If not spatial, we still could have 'lat' and 'lon' in the coordinates
+        if not self.spatial():
+            self.lat_name = [d for d in da.coords if (d.lower().startswith('lat') and d not in da.dims)]
+            self.lon_name = [d for d in da.coords if (d.lower().startswith('lon') and d not in da.dims)]
+            if len(self.lat_name) > 1 or len(self.lon_name) > 1:
+                msg  = "Ambiguity in which data array coordinates are spatial locations: "
+                msg += "lat = ['%s'], lon = ['%s']" % (",".join(self.lat_name),",".join(self.lon_name))
+                raise ValueError(msg)        
+            self.lat_name = self.lat_name[0] if self.lat_name else None
+            self.lon_name = self.lon_name[0] if self.lon_name else None
+            
+        # Read or build cell measures
+        if self.spatial():
+            self.is_regular = True
             dx = kwargs.get("cell_measure",None)
             if dx is None:
                 self._createCellMeasure()
             else:
-                try:
-                    self.ds,dx = xr.align(self.ds,dx,join='override',copy=False)
-                except:
-                    print(self.ds)
-                    print(dx)
-                    import sys; sys.exit(1)
+                self.ds,dx = xr.align(self.ds,dx,join='override',copy=False)
                 self.ds['cell_measure'] = dx
-                
+
     def __str__(self):
         da   = self.ds[self.varname]
         out  = da.__str__()
@@ -128,9 +163,9 @@ class Variable():
         tm =  self.ds['time_measure'] if  'time_measure' in  self.ds                 else None
         tm = other.ds['time_measure'] if ('time_measure' in other.ds and cm is None) else None
         out = self.ds[self.varname]-other.ds[other.varname]
-        out.name = "bias"
+        out.name = "diff"
         out.attrs['units'] = self.units()
-        return Variable(da = out,cell_measure = cm, time_measure = tm)
+        return Variable(da = out, varname = "diff", cell_measure = cm, time_measure = tm)
 
     def __truediv__(self,other):
         self,other = align_latlon(self,other)
@@ -147,6 +182,20 @@ class Variable():
     def temporal(self):
         if 'time' in self.ds[self.varname].dims: return True
         return False
+
+    def spatial(self):
+        if self.lat_name is None: return False
+        if self.lon_name is None: return False
+        if self.lat_name not in self.ds[self.varname].dims: return False
+        if self.lon_name not in self.ds[self.varname].dims: return False
+        return True
+
+    def sites(self):
+        if self.spatial(): return False
+        sdim = find_site_dimension(self.ds[self.varname])
+        if len(sdim) > 1:
+            raise ValueError(",".join([str(s) for s in sdim]))
+        if sdim: return True
     
     def timeBounds(self):
         """Return the time extent of the dataset/array
@@ -164,7 +213,7 @@ class Variable():
         """
         out = other-self
         out.ds[out.varname] *= out.ds[out.varname]
-        out = out.integrateInTime(mean=True)
+        out = out.integrate(dim='time',mean=True)
         out.ds[out.varname] = np.sqrt(out.ds[out.varname])
         return out
         
@@ -219,6 +268,25 @@ class Variable():
                 src_unit.convert(self.ds[self.ds[self.varname].attrs['bounds']].data,tar_unit,inplace=True)
         return self
 
+    def extractSites(self,v=None,lat=None,lon=None):
+        """
+        """   
+        assert self.spatial()
+        if v is not None:
+            da = self.ds[self.varname]
+            lat_name = [c for c in da.coords if c.lower().startswith("lat")]
+            lon_name = [c for c in da.coords if c.lower().startswith("lon")]
+            if lat_name and lon_name:
+                lat = v.ds[lat_name[0]]
+                lon = v.ds[lon_name[0]]
+        assert lat is not None
+        assert lon is not None
+        tm = self.ds.time_measure if "time_measure" in self.ds else None
+        coords = {'lat':lat,'lon':lon}
+        da = self.ds[self.varname].sel(coords,method='nearest').assign_coords(coords)
+        v = Variable(da = da, varname = str(da.name), time_measure = tm)
+        return v
+        
     def plot(self,**kwargs):
         """
         """
@@ -257,7 +325,57 @@ class Variable():
         else:
             da.plot(**kwargs)
             
-    def integrateInTime(self,t0=None,tf=None,mean=False):
+    def _std_time(self):
+        """Internal function for std in the time dimension.
+
+        """
+        mean = self.integrate(dim='time',mean=True)
+        out = (self.ds[self.varname]-mean.ds[mean.varname])**2
+        drops = ['time','actual_range']
+        attrs = {key:a for key,a in self.ds[self.varname].attrs.items() if key not in drops}
+        if 'ilamb' not in out.attrs: out.attrs['ilamb'] = ''
+        attrs['ilamb'] += "std(dim='time'); "
+        v = Variable(da = out, varname = 'none',
+                     cell_measure = self.ds["cell_measure"] if "cell_measure" in self.ds else None,
+                     time_measure = self.ds["time_measure"] if "time_measure" in self.ds else None)
+        v.ds[v.varname].attrs = attrs        
+        v = v.integrate(dim='time',mean=True)
+        v.ds[v.varname] = np.sqrt(v.ds[v.varname])
+        v.ds = v.ds.rename({v.varname:self.varname + "_std"})
+        v.varname = self.varname + "_std"
+        v.ds[v.varname].attrs = attrs        
+        return v
+
+    def _std_space(self,region=None):
+        """Internal function for std in the space dimension.
+
+        """
+        mean = self.integrate(dim='space',region=region,mean=True)
+        out = (self.ds[self.varname]-mean.ds[mean.varname])**2
+        drops = ['actual_range']
+        attrs = {key:a for key,a in self.ds[self.varname].attrs.items() if key not in drops}
+        if 'ilamb' not in out.attrs: out.attrs['ilamb'] = ''
+        attrs['ilamb'] += "std(dim='space'); "
+        v = Variable(da = out, varname = 'none',
+                     cell_measure = self.ds["cell_measure"] if "cell_measure" in self.ds else None,
+                     time_measure = self.ds["time_measure"] if "time_measure" in self.ds else None)
+        v.ds[v.varname].attrs = attrs        
+        v = v.integrate(dim='space',region=region,mean=True)
+        v.ds[v.varname] = np.sqrt(v.ds[v.varname])
+        v.ds = v.ds.rename({v.varname:self.varname + "_std"})
+        v.varname = self.varname + "_std"
+        v.ds[v.varname].attrs = attrs        
+        return v
+    
+    def std(self,dim,region=None):
+        """
+        """
+        if dim ==  "time": v = self._std_time()
+        if dim == "space": v = self._std_space(region)
+        if v.ds[v.varname].size == 1: v = float(v.ds[v.varname])
+        return v
+
+    def _integrate_time(self,t0=None,tf=None,mean=False):
         """
         """
         da = self.ds[self.varname]
@@ -277,7 +395,7 @@ class Variable():
                                                          "actual_range" not in key)}
         out.attrs = attrs
         if 'ilamb' not in out.attrs: out.attrs['ilamb'] = ''
-        out.attrs['ilamb'] += "integrateInTime(t0='%s',tf='%s',mean=%s); " % (t0,tf,mean)
+        out.attrs['ilamb'] += "integrate(dim='time',t0='%s',tf='%s',mean=%s); " % (t0,tf,mean)
         if mean:
             out /= dt.sum()
             if out_bnds is not None: out_bnds /= dt.sum()
@@ -292,60 +410,8 @@ class Variable():
             v.ds[bnd_name] = out_bnds
             v.ds[v.varname].attrs['bounds'] = bnd_name
         return v
-
-    def _std_time(self):
-        """Internal function for std in the time dimension.
-
-        """
-        mean = self.integrateInTime(mean=True)
-        out = (self.ds[self.varname]-mean.ds[mean.varname])**2
-        drops = ['time','actual_range']
-        attrs = {key:a for key,a in self.ds[self.varname].attrs.items() if key not in drops}
-        if 'ilamb' not in out.attrs: out.attrs['ilamb'] = ''
-        attrs['ilamb'] += "std(dim='time'); "
-        v = Variable(da = out, varname = 'none',
-                     cell_measure = self.ds["cell_measure"] if "cell_measure" in self.ds else None,
-                     time_measure = self.ds["time_measure"] if "time_measure" in self.ds else None)
-        v.ds[v.varname].attrs = attrs        
-        v = v.integrateInTime(mean=True)
-        v.ds[v.varname] = np.sqrt(v.ds[v.varname])
-        v.ds = v.ds.rename({v.varname:self.varname + "_std"})
-        v.varname = self.varname + "_std"
-        v.ds[v.varname].attrs = attrs        
-        return v
-
-    def _std_space(self,region=None):
-        """Internal function for std in the space dimension.
-
-        """
-        mean = self.integrateInSpace(region=region,mean=True)
-        out = (self.ds[self.varname]-mean.ds[mean.varname])**2
-        drops = ['actual_range']
-        attrs = {key:a for key,a in self.ds[self.varname].attrs.items() if key not in drops}
-        if 'ilamb' not in out.attrs: out.attrs['ilamb'] = ''
-        attrs['ilamb'] += "std(dim='space'); "
-        v = Variable(da = out, varname = 'none',
-                     cell_measure = self.ds["cell_measure"] if "cell_measure" in self.ds else None,
-                     time_measure = self.ds["time_measure"] if "time_measure" in self.ds else None)
-        v.ds[v.varname].attrs = attrs        
-        v = v.integrateInSpace(region=region,mean=True)
-        v.ds[v.varname] = np.sqrt(v.ds[v.varname])
-        v.ds = v.ds.rename({v.varname:self.varname + "_std"})
-        v.varname = self.varname + "_std"
-        v.ds[v.varname].attrs = attrs        
-        return v
     
-    def std(self,dim,region=None):
-        """
-        """
-        if dim ==  "time": v = self._std_time()
-        if dim == "space": v = self._std_space(region)
-        if v.ds[v.varname].size == 1: v = float(v.ds[v.varname])
-        return v
-    
-    def integrateInSpace(self,region=None,mean=False):
-        """
-        """
+    def _integrate_space(self,region=None,mean=False):
         assert "cell_measure" in self.ds
         ds = self.ds if region is None else ilamb_regions.getMask(region,self)
         da = ds[self.varname]
@@ -355,7 +421,7 @@ class Variable():
         units = Unit(self.ds[self.varname].attrs['units'])
         out.attrs = {key:a for key,a in v.attrs.items() if "cell_" not in key}
         if 'ilamb' not in out.attrs: out.attrs['ilamb'] = ''
-        out.attrs['ilamb'] += "integrateInSpace(mean=%s%s); " % (mean,"" if region is None else ",region='%s'" % region)
+        out.attrs['ilamb'] += "integrate(dim='space',mean=%s%s); " % (mean,"" if region is None else ",region='%s'" % region)
         if mean:
             mask = da.isnull()
             dims = set(mask.dims).difference(set(dx.dims))
@@ -371,6 +437,39 @@ class Variable():
         v = Variable(da = out, varname = str(da.name) + "_sint", time_measure = tm)
         return v
 
+    def _integrate_site(self,region=None,mean=False):
+        """Integrate over sites, probably doesn't make sense but gives us a uniform API for taking means across space/sites.
+
+        """
+        ds = self.ds if region is None else ilamb_regions.getMask(region,self)
+        da = ds[self.varname]
+        sdim = find_site_dimension(da)
+        if mean:
+            out = da.mean(dim=sdim)
+        else:
+            out = da.sum(dim=sdim)            
+        out.attrs['units'] = self.units()
+        tm = self.ds.time_measure if "time_measure" in self.ds else None
+        v = Variable(da = out, varname = str(da.name) + "_sint", time_measure = tm)
+        return v
+    
+    def integrate(self,dim,region=None,mean=False,t0=None,tf=None):
+        """
+        """
+        v = None
+        assert dim in ['time','space','site']
+        if dim == "space":
+            assert self.spatial()
+            v = self._integrate_space(region=region,mean=mean)
+        if dim ==  "site":
+            assert self.sites()
+            v = self._integrate_site(region=region,mean=mean)
+        if dim == "time":
+            assert self.temporal()
+            v = self._integrate_time(t0=t0,tf=tf,mean=mean)
+        assert v is not None
+        return v
+        
     def detrend(self,dim=['time'],degree=1):
         """Remove a polynomial trend from each dimension, one at a time.
 
@@ -405,6 +504,7 @@ class Variable():
         """
         varname = self.varname
         ds = self.ds.groupby('time.month').mean(dim='time').rename({'month':'time'})
+        ds['time'] = ds['time'].astype(float)
         tm = xr.DataArray(data=np.asarray([31,28,31,30,31,30,31,31,30,31,30,31],dtype='float'),
                           dims=['time'],coords={'time':ds['time']})
         cm = self.ds['cell_measure'] if 'cell_measure' in self.ds else None
@@ -455,6 +555,11 @@ class Variable():
     def nestSpatialGrids(self,*args):
         """
         """
+        if self.sites():
+            args = [self,]+list(args)
+            for a in args:
+                assert a.sites()
+            return args
         lat = self.ds[self.lat_name].values
         lon = self.ds[self.lon_name].values
         for v in args:
@@ -571,13 +676,13 @@ if __name__ == "__main__":
         # reference dataset with no cell measures
         fn = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc"
         v  = Variable(filename = fn, varname = "gpp")
-        vt = v.integrateInTime(mean=True).convert("g m-2 d-1")
+        vt = v.integrate(dim='time',mean=True).convert("g m-2 d-1")
         vt.plot(cmap="Greens",vmin=0); plt.show()
         # the model needs them and is not masked where the measures
         # are 0, like over oceans
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01")
-        vt = v.integrateInTime(mean=True).convert("g m-2 d-1")
+        vt = v.integrate(dim='time',mean=True).convert("g m-2 d-1")
         vt.plot(cmap="Greens",vmin=0); plt.show()
         # in order to get the proper masking, we need to associate
         # cell measures
@@ -588,7 +693,7 @@ if __name__ == "__main__":
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01",
                       cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
-        vt = v.integrateInTime(mean=True).convert("g m-2 d-1")
+        vt = v.integrate(dim='time',mean=True).convert("g m-2 d-1")
         vt.plot(cmap="Greens",vmin=0); plt.show()
         
     def test_spaceint():
@@ -596,7 +701,7 @@ if __name__ == "__main__":
         # reference dataset with no cell measures
         fn = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc"
         v  = Variable(filename = fn, varname = "gpp").convert('g m-2 d-1')
-        vs = v.integrateInSpace(mean=True)
+        vs = v.integrate(dim='space',mean=True)
         vs.plot(ax=ax,label='reference')
         # the model needs measures and is not masked where the
         # measures are 0, like over oceans, unlike netCDF4 python
@@ -604,7 +709,7 @@ if __name__ == "__main__":
         # we have to create our own method of ignoring areas.
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01").convert('g m-2 d-1')
-        vs = v.integrateInSpace(mean=True)
+        vs = v.integrate(dim='space',mean=True)
         vs.plot(ax=ax,label='missing model measures')
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/areacella_fx_CanESM5_historical_r1i1p1f1_gn.nc"
         dx = Variable(filename = fn,varname = "areacella").convert("m2")
@@ -613,7 +718,7 @@ if __name__ == "__main__":
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01",
                       cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
-        vs = v.integrateInSpace(mean=True).convert('g m-2 d-1')
+        vs = v.integrate(dim='space',mean=True).convert('g m-2 d-1')
         vs.plot(ax=ax,label='with correct model measures')
         plt.legend()
         plt.show() # requires nc-time-axis
@@ -627,19 +732,19 @@ if __name__ == "__main__":
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01",
                       cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
-        vs = v.integrateInSpace(mean=True).convert('g m-2 d-1')
+        vs = v.integrate(dim='space',mean=True).convert('g m-2 d-1')
         fig,ax = plt.subplots(tight_layout=True)
         vs.plot(ax=ax,label='original')
         vs.detrend(dim=['time'])
         print(vs.ds.gpp_sint.ilamb)
         vs.plot(ax=ax,label='detrended')
         v.detrend(dim='time')
-        vs = v.integrateInSpace(mean=True).convert('g m-2 d-1')
+        vs = v.integrate(dim='space',mean=True).convert('g m-2 d-1')
         vs.plot(ax=ax,label='detrended multi-dim',linestyle='--')
         print(vs.ds.gpp_sint.ilamb)
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01",
                       cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
-        vs = v.integrateInSpace(mean=True).convert('g m-2 d-1')
+        vs = v.integrate(dim='space',mean=True).convert('g m-2 d-1')
         vs.detrend(dim=['time'],degree=3)
         print(vs.ds.gpp_sint.ilamb)
         vs.plot(ax=ax,label='detrended cubic',linestyle=':')
@@ -654,7 +759,7 @@ if __name__ == "__main__":
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01",
                       cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
-        vs = v.integrateInSpace(mean=True).convert('g m-2 d-1')
+        vs = v.integrate(dim='space',mean=True).convert('g m-2 d-1')
         fig,ax = plt.subplots(tight_layout=True)
         vs.plot(ax=ax,label='original')
         vs.detrend(dim='time')
@@ -663,7 +768,7 @@ if __name__ == "__main__":
         vs.decycle()
         print(vs.ds.gpp_sint.ilamb)
         vs.plot(ax=ax,label='decycle')
-        vs = v.integrateInSpace(mean=True).convert('g m-2 d-1').detrend(dim='time').decycle()
+        vs = v.integrate(dim='space',mean=True).convert('g m-2 d-1').detrend(dim='time').decycle()
         print(vs.ds.gpp_sint.ilamb)
         vs.plot(ax=ax,label='composed',linestyle=':')
         plt.legend()
@@ -677,7 +782,7 @@ if __name__ == "__main__":
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01",
                       cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
-        vt = v.integrateInTime(mean=True).convert('g m-2 d-1')
+        vt = v.integrate(dim='time',mean=True).convert('g m-2 d-1')
         vt.plot(cmap="Greens",vmin=0,region="nhsa"); plt.show()
         vt.plot(cmap="Greens",vmin=0,region="shsa"); plt.show()
         vt.plot(cmap="Greens",vmin=0); plt.show()
@@ -704,14 +809,14 @@ if __name__ == "__main__":
         fn = "/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5/gpp_Lmon_CanESM5_historical_r1i1p1f1_gn_185001-201412.nc"
         v  = Variable(filename = fn, varname = "gpp", t0 = "1990-01-01", tf = "2000-01-01",
                       cell_measure = dx.ds['areacella'] * df.ds['sftlf'])
-        vt = v.integrateInTime(mean=True).convert('g m-2 d-1')
+        vt = v.integrate(dim='time',mean=True).convert('g m-2 d-1')
         lat = np.linspace(-90, 90,361); lat = 0.5*(lat[:-1]+lat[1:])
         lon = np.linspace(  0,360,721); lon = 0.5*(lon[:-1]+lon[1:])
         Vt = vt.interpolate(lat=lat,lon=lon)
         vt.plot(cmap="Greens",vmin=0); plt.show()
         Vt.plot(cmap="Greens",vmin=0); plt.show()
-        vt = vt.integrateInSpace().convert("Pg yr-1").ds.gpp_tint_sint.values
-        Vt = Vt.integrateInSpace().convert("Pg yr-1").ds.gpp_tint_sint.values
+        vt = vt.integrate(dim='space').convert("Pg yr-1").ds.gpp_tint_sint.values
+        Vt = Vt.integrate(dim='space').convert("Pg yr-1").ds.gpp_tint_sint.values
         e  = np.abs((Vt-vt)/vt)
         assert e < 1e-2
 
