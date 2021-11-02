@@ -142,7 +142,9 @@ class Regions(object):
             lat = var.ds[var.lat_name]
             lon = var.ds[var.lon_name]
             if lon.max() > 180: rlon = (np.asarray(rlon)+360)%360
-            ds = xr.where((lat>=rlat[0])*(lat<=rlat[1])*(lon>=rlon[0])*(lon<=rlon[1]),var.ds,np.nan)
+            keep = [u for u in var.ds if var.lat_name in var.ds[u].dims and var.lon_name in var.ds[u].dims]
+            ds = var.ds.drop_vars([u for u in var.ds if u not in keep])
+            ds = xr.where((lat>=rlat[0])*(lat<=rlat[1])*(lon>=rlon[0])*(lon<=rlon[1]),ds,np.nan)
             return ds
         msg = "Region type #%d not recognized" % rtype
         raise ValueError(msg)

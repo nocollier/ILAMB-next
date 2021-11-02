@@ -1,9 +1,11 @@
 import os
+import glob
 from Variable import Variable
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import xarray as xr
+from Post import generate_plot_database
 
 def is_spatially_aligned(a,b):
     """Are the lats and lons of a and b aligned?
@@ -43,10 +45,6 @@ def adjust_lon(a,b):
 
 def sanitize_into_dataset(d):
     """Cleanup dictionaries for use in creation of a xarray dataset.
-
-    * make sure the dataarray names match the keys of the dictionary
-    * add '_' to time/lat/lon dimensions if more than one unique set exists
-    * weed out attributes which were carried over from the source files
 
     """
     ds = {}
@@ -92,8 +90,11 @@ def sanitize_into_dataset(d):
         
     # make sure we dealt with everything
     assert(len(set(d.keys()).difference(set(ds.keys())))==0)
-    keep = ['_FillValue','units','ilamb']
-    for name in ds: ds[name].attrs = { key:val for key,val in ds[name].attrs.items() if key in keep }
+    keep = ['_FillValue','units','ilamb','analysis','region']
+    for name in ds:
+        ds[name].attrs = { key:val for key,val in ds[name].attrs.items() if key in keep }
+        #ds[name].attrs['actual_range'] = [ds[name].min(),ds[name].max()]
+        #ds[name].attrs['percentiles'] = list(ds[name].quantile([0.01,0.99]).to_numpy())
     ds = xr.Dataset(ds)
     return ds
 
@@ -115,11 +116,22 @@ def overall_score(df):
                    ignore_index=True)
     return df
 
+def add_analysis_name(name,*args):
+    """For each dictionary in args and each variable therein, add the analysis name to the attributes.
+
+    """
+    for a in args:
+        for key in a:
+            v = a[key]
+            v.ds[v.varname].attrs['analysis'] = name
+    return args
+
 def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
     """
 
     """
     v = r0.varname
+    aname = "Bias"
     sdim = "site" if r0.sites() else "space"
     
     # period means on original grids
@@ -148,14 +160,14 @@ def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
     df = []
     for region in regions:
         s = rm0.integrate(dim=sdim,mean=True,region=region)
-        df.append(['Benchmark',str(region),'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
+        df.append(['Reference',str(region),aname,'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
         s = cm0.integrate(dim=sdim,mean=True,region=region)
-        df.append(['model',str(region),'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
+        df.append(['model',str(region),aname,'Period Mean','scalar',s.units(),float(s.ds[s.varname].values)])
         s = bias.integrate(dim=sdim,mean=True,region=region)
-        df.append(['model',str(region),'Bias','scalar',s.units(),float(s.ds[s.varname].values)])
+        df.append(['model',str(region),aname,'Bias','scalar',s.units(),float(s.ds[s.varname].values)])
         s = eps.integrate(dim=sdim,mean=True,region=region)
-        df.append(['model',str(region),'Bias Score','score',s.units(),float(s.ds[s.varname].values)])
-    df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])
+        df.append(['model',str(region),aname,'Bias Score','score',s.units(),float(s.ds[s.varname].values)])
+    df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])
 
     # collect output for intermediate files
     r_plot = {
@@ -167,6 +179,7 @@ def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
         "bias_map_of_%s"      % v: bias,
         "biasscore_map_of_%s" % v: eps
     }
+    r_plot,c_plot = add_analysis_name(aname,r_plot,c_plot)
     return r_plot,c_plot,df
 
 def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
@@ -174,6 +187,7 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
 
     """
     v = r0.varname
+    aname = "RMSE"
     sdim = "site" if r0.sites() else "space"
     
     # validity checks
@@ -208,13 +222,15 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
     }
     df = []
     for region in regions:
-        r_plot['spaceint_of_%s_over_%s' % (v,region)] = r0.integrate(sdim,mean=True,region=region)
-        c_plot['spaceint_of_%s_over_%s' % (v,region)] = c0.integrate(sdim,mean=True,region=region)
+        name = 'spaceint_of_%s_over_%s' % (v,region)
+        r_plot[name] = r0.integrate(sdim,mean=True,region=region)
+        c_plot[name] = c0.integrate(sdim,mean=True,region=region)
         s = rmse.integrate(sdim,mean=True,region=region)
-        df.append(['model',str(region),'RMSE','scalar',s.units(),float(s.ds[s.varname].values)])
+        df.append(['model',str(region),aname,'RMSE','scalar',s.units(),float(s.ds[s.varname].values)])
         s = eps.integrate(sdim,mean=True,region=region)
-        df.append(['model',str(region),'RMSE Score','score',s.units(),float(s.ds[s.varname].values)])
-    df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])        
+        df.append(['model',str(region),aname,'RMSE Score','score',s.units(),float(s.ds[s.varname].values)])
+    df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])        
+    r_plot,c_plot = add_analysis_name(aname,r_plot,c_plot)
     return r_plot,c_plot,df
 
 def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
@@ -223,6 +239,7 @@ def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
     """
     if (r0.ds['time'].size < 12 or c0.ds['time'].size < 12): return {},{},[]
     v = r0.varname
+    aname = "Annual Cycle"
     sdim = "site" if r0.sites() else "space"
     
     # compute cycle and month of maximum
@@ -252,23 +269,27 @@ def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
         'phase_map_of_%s' % v: rmx0
     }
     c_plot = {
-        'phase_map_of_%s' % v: cmx0
+        'phase_map_of_%s' % v: cmx0,
+        'shift_map_of_%s' % v: ps,
+        'shiftscore_map_of_%s' % v: score
     }
     df = []
     for region in regions:
         r_plot['cycle_of_%s_over_%s' % (v,region)] = rc0.integrate(sdim,mean=True,region=region)
         c_plot['cycle_of_%s_over_%s' % (v,region)] = cc0.integrate(sdim,mean=True,region=region)
         s = ps.integrate(sdim,mean=True,region=region)
-        df.append(['model',str(region),'Phase Shift','scalar',s.units(),float(s.ds[s.varname].values)])
+        df.append(['model',str(region),aname,'Phase Shift','scalar',s.units(),float(s.ds[s.varname].values)])
         s = score.integrate(sdim,mean=True,region=region)
-        df.append(['model',str(region),'Seasonal Cycle Score','score',s.units(),float(s.ds[s.varname].values)])
-    df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])        
+        df.append(['model',str(region),aname,'Seasonal Cycle Score','score',s.units(),float(s.ds[s.varname].values)])
+    df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])        
+    r_plot,c_plot = add_analysis_name(aname,r_plot,c_plot)
     return r_plot,c_plot,df
 
 def ScoreSpatialDistribution(r0,c0,r=None,c=None,regions=[None]):
     """
 
     """
+    aname = "Spatial Distribution"
     if r0.temporal(): r0 = r0.integrate(dim='time',mean=True)
     if c0.temporal(): c0 = c0.integrate(dim='time',mean=True)
     r,c = pick_grid_aligned(r0,c0,r,c)
@@ -278,10 +299,10 @@ def ScoreSpatialDistribution(r0,c0,r=None,c=None,regions=[None]):
         std  = c.std(dim='space',region=region)/std0
         corr = r.correlation(c,'space',region=region)
         score = 2*(1+corr)/((std+1/std)**2)
-        df.append(['model',str(region),'Spatial Normalized Standard Deviation','scalar','1',std])
-        df.append(['model',str(region),'Spatial Correlation'                  ,'scalar','1',corr])
-        df.append(['model',str(region),'Spatial Distribution Score'           ,'score' ,'1',score])
-    df = pd.DataFrame(df,columns=['Model','Region','ScalarName','ScalarType','Units','Data'])        
+        df.append(['model',str(region),aname,'Spatial Normalized Standard Deviation','scalar','1',std])
+        df.append(['model',str(region),aname,'Spatial Correlation'                  ,'scalar','1',corr])
+        df.append(['model',str(region),aname,'Spatial Distribution Score'           ,'score' ,'1',score])
+    df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])        
     return {},{},df
 
 class Confrontation(object):
@@ -294,6 +315,7 @@ class Confrontation(object):
         regions
         master
         path
+        cmap
         """
         self.source   = kwargs.get(  "source",None)
         self.variable = kwargs.get("variable",None)
@@ -301,6 +323,8 @@ class Confrontation(object):
         self.regions  = kwargs.get( "regions",[None])
         self.master   = kwargs.get(  "master",True)
         self.path     = kwargs.get(    "path","./")
+        self.cmap     = kwargs.get(    "cmap",None)
+        self.df_plot  = None
         assert self.source is not None
         if not os.path.isfile(self.source):
             msg = "Cannot find the source, tried looking here: '%s'" % self.source
@@ -373,12 +397,30 @@ class Confrontation(object):
 
         # output maps and curves
         ds = sanitize_into_dataset(cplot)
+        ds.attrs = {'name':m.name}
         ds.to_netcdf(os.path.join(self.path,"%s.nc" % m.name))
         if self.master:
             ds = sanitize_into_dataset(rplot)
-            ds.to_netcdf(os.path.join(self.path,"Benchmark.nc"))
-        
-        
+            ds.attrs = {'name':'Reference'}
+            ds.to_netcdf(os.path.join(self.path,"Reference.nc"))
+
+
+    def plot(self,m):
+        """
+
+        """
+        if self.df_plot is None:
+            self.df_plot = generate_plot_database(glob.glob(os.path.join(self.path,"*.nc")),cmap=self.cmap)
+        df = self.df_plot[(self.df_plot.Model==m.name) & (self.df_plot.IsSpace==True)]
+        for i,r in df.iterrows():
+            v = Variable(filename=r['Filename'],varname=r['Variable'])
+            for region in self.regions:
+                v.plot(cmap=r['Colormap'],vmin=r['Plot Min'],vmax=r['Plot Max'],region=region,tight_layout=True)
+                path = os.path.join(self.path,"%s_%s_%s.png" % (m.name,str(region),r['Variable'].split("_")[0]))
+                plt.gcf().savefig(path)
+                plt.close()
+                
+                
 if __name__ == "__main__":
     from ModelResult import ModelResult
     import time
@@ -398,16 +440,23 @@ if __name__ == "__main__":
                        variable = "gpp",
                        unit = "g m-2 d-1",
                        regions = [None,"nhsa"],
+                       cmap = "Greens",
                        path = "./_build/gpp/FLUXCOM"),
          Confrontation(source = "/home/nate/work/ILAMB-Data/CLASS/pr.nc",
                        variable = "pr",
                        unit = "kg m-2 d-1",
                        path = "./_build/pr/CLASS/")]
-    for c in C:
+    for c in C[1:2]:
         print(c.source,c.variable)
         for m in M:
             t0 = time.time()
             print("  %10s" % (m.name),end=' ',flush=True)
             c.confront(m)
+            dt = time.time()-t0
+            print("%.0f" % dt)
+        for m in M:
+            t0 = time.time()
+            print("  %10s" % (m.name),end=' ',flush=True)
+            c.plot(m)
             dt = time.time()-t0
             print("%.0f" % dt)

@@ -27,7 +27,10 @@ def extents_space(da,lat_name,lon_name):
     nl = (da.isnull()==False)
     lat = np.where(nl.sum(lon_name)>0)[0]
     lon = np.where(nl.sum(lat_name)>0)[0]
-    return np.asarray([float(da.lon[lon[0]]),float(da.lon[lon[-1]]),float(da.lat[lat[0]]),float(da.lat[lat[-1]])])
+    return np.asarray([float(da[lon_name][lon[0]]),
+                       float(da[lon_name][lon[-1]]),
+                       float(da[lat_name][lat[0]]),
+                       float(da[lat_name][lat[-1]])])
 
 def extents_sites(da,lat,lon):
     """Find the extent of the non-null data.
@@ -45,14 +48,18 @@ def pick_projection(extents):
 
     """
     if (extents[1]-extents[0]) > 300:
+        aspect_ratio = 2.
         proj = ccrs.Robinson(central_longitude=0)
         if (extents[2] >   0) and (extents[3] > 75):
+            aspect_ratio = 1.
             proj = ccrs.Orthographic(central_latitude=+90,central_longitude=0)
         if (extents[2] < -75) and (extents[3] <  0):
+            aspect_ratio = 1.
             proj = ccrs.Orthographic(central_latitude=-90,central_longitude=0)
     else:
+        aspect_ratio = (extents[1]-extents[0])/(extents[3]-extents[2])
         proj = ccrs.PlateCarree(central_longitude=extents[:2].mean())
-    return proj
+    return proj,aspect_ratio
 
 def find_site_dimension(da):
     """
@@ -153,7 +160,7 @@ class Variable():
             else:
                 self.ds,dx = xr.align(self.ds,dx,join='override',copy=False)
                 self.ds['cell_measure'] = dx
-
+        
     def __str__(self):
         da   = self.ds[self.varname]
         out  = da.__str__()
@@ -323,25 +330,31 @@ class Variable():
             return ax
         
         region = kwargs.get("region",None)
+        if "region" in kwargs: kwargs.pop("region")
+        if "cmap"   in kwargs: kwargs['cmap'] = plt.get_cmap(kwargs['cmap'],9)
+        
         ds = self.ds
-        if region is not None:
-            kwargs.pop("region")
-            ds = ilamb_regions.getMask(region,self)
+        if region is not None: ds = ilamb_regions.getMask(region,self)
         da = ds[self.varname]
         if not self.temporal() and self.spatial():
             if "cell_measure" in ds: da = xr.where(ds['cell_measure']<1,np.nan,da)
-            ext = extents_space(da)
-            proj = pick_projection(ext)
+            ext = extents_space(da,self.lat_name,self.lon_name)
+            proj,aspect = pick_projection(ext)
+            figsize = kwargs.pop('figsize') if 'figsize' in kwargs else (6,6/aspect)
             fig,ax = plt.subplots(dpi=200,
                                   tight_layout=kwargs.pop('tight_layout') if 'tight_layout' in kwargs else None,
-                                  figsize=kwargs.pop('figsize') if 'figsize' in kwargs else None,
+                                  figsize=figsize,
                                   subplot_kw={'projection':proj})
-            p = da.plot(ax=ax,transform=ccrs.PlateCarree(),**kwargs)
+            p = da.plot(ax          = ax,
+                        transform   = ccrs.PlateCarree(),
+                        cbar_kwargs = {'label':self.units()},
+                        **kwargs)
+            ax.set_title("")
             ax = _finalize_plot(ax,ext)
         elif not self.temporal() and self.sites():
             if self.lat_name is None or self.lon_name is None: return
             ext = extents_sites(da,self.ds[self.lat_name],self.ds[self.lon_name])
-            proj = pick_projection(ext)
+            proj,aspect = pick_projection(ext)
             fig,ax = plt.subplots(dpi=200,
                                   tight_layout=kwargs.pop('tight_layout') if 'tight_layout' in kwargs else None,
                                   figsize=kwargs.pop('figsize') if 'figsize' in kwargs else None,
