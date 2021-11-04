@@ -404,22 +404,33 @@ class Confrontation(object):
             ds.attrs = {'name':'Reference'}
             ds.to_netcdf(os.path.join(self.path,"Reference.nc"))
 
-
-    def plot(self,m):
+    def _plot(self,m=None):
         """
 
         """
+        name = "Reference" if m is None else m.name
         if self.df_plot is None:
             self.df_plot = generate_plot_database(glob.glob(os.path.join(self.path,"*.nc")),cmap=self.cmap)
-        df = self.df_plot[(self.df_plot.Model==m.name) & (self.df_plot.IsSpace==True)]
+        df = self.df_plot[(self.df_plot.Model==name) & (self.df_plot.IsSpace==True)]
         for i,r in df.iterrows():
             v = Variable(filename=r['Filename'],varname=r['Variable'])
             for region in self.regions:
                 v.plot(cmap=r['Colormap'],vmin=r['Plot Min'],vmax=r['Plot Max'],region=region,tight_layout=True)
-                path = os.path.join(self.path,"%s_%s_%s.png" % (m.name,str(region),r['Variable'].split("_")[0]))
+                path = os.path.join(self.path,"%s_%s_%s.png" % (name,str(region),r['Variable'].split("_")[0]))
                 plt.gcf().savefig(path)
                 plt.close()
-                
+        
+    def plotReference(self):
+        """
+
+        """
+        self._plot()
+        
+    def plotModel(self,m):
+        """
+
+        """
+        self._plot(m)
                 
 if __name__ == "__main__":
     from ModelResult import ModelResult
@@ -451,12 +462,13 @@ if __name__ == "__main__":
         for m in M:
             t0 = time.time()
             print("  %10s" % (m.name),end=' ',flush=True)
-            c.confront(m)
+            #c.confront(m)
             dt = time.time()-t0
             print("%.0f" % dt)
         for m in M:
             t0 = time.time()
             print("  %10s" % (m.name),end=' ',flush=True)
-            c.plot(m)
+            #c.plotModel(m)
             dt = time.time()-t0
             print("%.0f" % dt)
+        c.plotReference()

@@ -57,7 +57,8 @@ def pick_projection(extents):
             aspect_ratio = 1.
             proj = ccrs.Orthographic(central_latitude=-90,central_longitude=0)
     else:
-        aspect_ratio = (extents[1]-extents[0])/(extents[3]-extents[2])
+        aspect_ratio  = (max(extents[1],extents[0])-min(extents[1],extents[0]))
+        aspect_ratio /= (max(extents[3],extents[2])-min(extents[3],extents[2]))
         proj = ccrs.PlateCarree(central_longitude=extents[:2].mean())
     return proj,aspect_ratio
 
