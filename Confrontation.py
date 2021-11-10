@@ -90,7 +90,7 @@ def sanitize_into_dataset(d):
         
     # make sure we dealt with everything
     assert(len(set(d.keys()).difference(set(ds.keys())))==0)
-    keep = ['_FillValue','units','ilamb','analysis','region']
+    keep = ['_FillValue','units','ilamb','analysis','region','longname']
     for name in ds:
         ds[name].attrs = { key:val for key,val in ds[name].attrs.items() if key in keep }
         #ds[name].attrs['actual_range'] = [ds[name].min(),ds[name].max()]
@@ -137,13 +137,16 @@ def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
     # period means on original grids
     rm0 = r0.integrate(dim='time',mean=True) if r0.temporal() else r0
     cm0 = c0.integrate(dim='time',mean=True) if c0.temporal() else c0
-
+    rm0.setAttr("longname","Temporal Mean")
+    cm0.setAttr("longname","Temporal Mean")
+    
     # if we have temporal data, the normalizer is the std
     norm0 = r0.std(dim='time') if r0.ds['time'].size > 1 else rm0
 
     # interpolate to a nested grid
     rm,cm,norm = rm0.nestSpatialGrids(cm0,norm0)
     bias = cm-rm
+    bias.setAttr("longname","Bias")
     
     # do we have reference uncertainties?
     ru = rm.uncertainty()
@@ -155,7 +158,8 @@ def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
     eps.ds[eps.varname].attrs['units'] = cm.units()
     eps /= norm
     eps.ds[eps.varname] = np.exp(-eps.ds[eps.varname])
-
+    eps.setAttr("longname","Bias Score")
+    
     # populate scalars over regions
     df = []
     for region in regions:
@@ -203,6 +207,7 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
 
     # compute the RMSE error and score
     rmse = r.rmse(c)
+    rmse.setAttr("longname","RMSE")
     r = r.detrend(degree=0)
     c = c.detrend(degree=0)
     eps = c-r
@@ -213,6 +218,7 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
     eps /= norm
     eps.ds[eps.varname] = np.exp(-eps.ds[eps.varname])    
     eps.ds[eps.varname].attrs['units'] = "1"
+    eps.setAttr("longname","RMSE Score")
     
     # collect output for intermediate files
     r_plot = {}
@@ -247,7 +253,9 @@ def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
     cc0 = c0 if c0.ds['time'].size==12 else c0.cycle()
     rmx0 = rc0.maxMonth()
     cmx0 = cc0.maxMonth()
-
+    rmx0.setAttr("longname","Month of Maximum")
+    cmx0.setAttr("longname","Month of Maximum")
+    
     # phase shift on nested grid
     rmx,cmx = rmx0.nestSpatialGrids(cmx0)
     ps = cmx-rmx
@@ -257,12 +265,14 @@ def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
     ps.ds[ps.varname] = xr.where(ps.ds[ps.varname]<-6,ps.ds[ps.varname]+12,ps.ds[ps.varname])
     ps.ds[ps.varname] = xr.where(ps.ds[ps.varname]>+6,ps.ds[ps.varname]-12,ps.ds[ps.varname])
     ps.ds[ps.varname].attrs = attrs
+    ps.setAttr("longname","Phase Shift")
     
     # compute score
     score = Variable(da = xr.apply_ufunc(lambda a: 1-np.abs(a)/6,ps.ds[ps.varname]),
                      varname = "shiftscore_map_of_%s" % v,
                      cell_measure = ps.ds['cell_measure'] if 'cell_measure' in ps.ds else None)
     score.ds[score.varname].attrs['units'] ='1'
+    score.setAttr("longname","Seasonal Cycle Score")
     
     # collect output for intermediate files
     r_plot = {
@@ -397,11 +407,11 @@ class Confrontation(object):
 
         # output maps and curves
         ds = sanitize_into_dataset(cplot)
-        ds.attrs = {'name':m.name}
+        ds.attrs = {'name':m.name,'color':m.color}
         ds.to_netcdf(os.path.join(self.path,"%s.nc" % m.name))
         if self.master:
             ds = sanitize_into_dataset(rplot)
-            ds.attrs = {'name':'Reference'}
+            ds.attrs = {'name':'Reference','color':(0,0,0)}
             ds.to_netcdf(os.path.join(self.path,"Reference.nc"))
 
     def _plot(self,m=None):
@@ -417,6 +427,7 @@ class Confrontation(object):
             for region in self.regions:
                 v.plot(cmap=r['Colormap'],vmin=r['Plot Min'],vmax=r['Plot Max'],region=region,tight_layout=True)
                 path = os.path.join(self.path,"%s_%s_%s.png" % (name,str(region),r['Variable'].split("_")[0]))
+                plt.gca().set_title(name + " " + r['Longname'])
                 plt.gcf().savefig(path)
                 plt.close()
         
@@ -431,7 +442,24 @@ class Confrontation(object):
 
         """
         self._plot(m)
-                
+        
+def assign_model_colors(M):
+    """Later migrate this elsewhere.
+
+    """
+    n = len(M)
+    if n <= 10:
+        clrs = np.asarray(plt.get_cmap("tab10").colors)
+    elif n <= 20:
+        clrs = np.asarray(plt.get_cmap("tab20").colors)
+    elif n <= 40:
+        clrs = np.vstack([plt.get_cmap("tab20b").colors,plt.get_cmap("tab20c").colors])
+    else:
+        msg = "We only have 40 colors to assign to models"
+        raise ValueError(msg)
+    for i,m in enumerate(M):
+        m.color = clrs[i]
+    
 if __name__ == "__main__":
     from ModelResult import ModelResult
     import time
@@ -441,7 +469,8 @@ if __name__ == "__main__":
     for m in M:
         m.findFiles()
         m.getGridInformation()
-
+    assign_model_colors(M)
+    
     C = [Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXNET2015/gpp.nc",
                        variable = "gpp",
                        unit = "g m-2 d-1",
@@ -468,7 +497,7 @@ if __name__ == "__main__":
         for m in M:
             t0 = time.time()
             print("  %10s" % (m.name),end=' ',flush=True)
-            #c.plotModel(m)
+            c.plotModel(m)
             dt = time.time()-t0
             print("%.0f" % dt)
         c.plotReference()

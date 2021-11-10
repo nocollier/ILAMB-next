@@ -256,6 +256,9 @@ class Variable():
     def units(self):
         if "units" not in self.ds[self.varname].attrs: return "1"
         return self.ds[self.varname].attrs['units']
+
+    def setAttr(self,attr,value):
+        self.ds[self.varname].attrs[attr] = value
     
     def convert(self,unit,density=998.2,molar_mass=12.011):
         """Using cf_units (UDUNITS2) convert the unit in place
@@ -341,7 +344,7 @@ class Variable():
             if "cell_measure" in ds: da = xr.where(ds['cell_measure']<1,np.nan,da)
             ext = extents_space(da,self.lat_name,self.lon_name)
             proj,aspect = pick_projection(ext)
-            figsize = kwargs.pop('figsize') if 'figsize' in kwargs else (6,6/aspect)
+            figsize = kwargs.pop('figsize') if 'figsize' in kwargs else (6*1.03,6/aspect)
             fig,ax = plt.subplots(dpi=200,
                                   tight_layout=kwargs.pop('tight_layout') if 'tight_layout' in kwargs else None,
                                   figsize=figsize,
@@ -655,8 +658,8 @@ class Variable():
             dt *= 1e-9/86400 # [ns] to [d]
             self.ds['time_measure'] = dt.astype('float')
         else:
-            msg = "_createTimeMeasure() not implemented if time 'bounds' not present"
-            raise ValueError(msg)
+            dt = da['time'].diff(dim='time').mean()
+            self.ds['time_measure'] = da.time.copy(data=[dt]*da.time.size)
         if 'ilamb' not in da.attrs: self.ds[self.varname].attrs['ilamb'] = ''
         self.ds[self.varname].attrs['ilamb'] += "_createTimeMeasure(); "
     

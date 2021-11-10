@@ -1,6 +1,7 @@
 import xarray as xr
 import pandas as pd
 import numpy as np
+from Variable import Variable
 
 def is_time(da):
     """Do we have a 1D temporal curve to plot?
@@ -35,11 +36,18 @@ def get_analysis(da):
     if "analysis" in da.attrs: analysis = da.attrs['analysis']
     return analysis
 
+def get_longname(da):
+    """The plot name can be encoded in the attributes.
+
+    """
+    name = pd.NA
+    if "longname" in da.attrs: name = da.attrs['longname']
+    return name
+
 def get_colormap(da,cmap=None):
     """Colormaps can be encoded or use defaults.
 
     """
-    if da.dims[0].startswith("time"): return pd.NA
     if "cmap"  in da.attrs: return da.attrs["cmap"]
     if "score" in da.name:  return "winter"
     if "bias"  in da.name:  return "seismic"
@@ -55,7 +63,7 @@ def generate_plot_database(ncfiles,cmap=None):
     """
     if type(ncfiles) is not list: ncfiles = [ncfiles]
     filename = []; varname = []; source = []; istime = []; isspace = []
-    region = []; analysis = []; colormap = []
+    region = []; analysis = []; colormap = []; longname = []
     for f in ncfiles:
         ds = xr.open_dataset(f)
         for v in ds:
@@ -67,10 +75,14 @@ def generate_plot_database(ncfiles,cmap=None):
             isspace .append(is_space(da))
             region  .append(get_region(da))
             analysis.append(get_analysis(da))
-            colormap.append(get_colormap(da,cmap))
+            longname.append(get_longname(da))
+            clr = (np.asarray(ds.color)*256).astype(int)
+            clr = 'rgb(%d,%d,%d)' % (clr[0],clr[1],clr[2])
+            colormap.append(clr if (istime[-1] and not isspace[-1]) else get_colormap(da,cmap))
     df = {"Filename":filename,"Variable":varname,"Model":source,"IsTime":istime,"IsSpace":isspace,
-          "Region":region,"Analysis":analysis,"Colormap":colormap}
-    df = pd.DataFrame(df,columns=["Filename","Variable","Model","IsTime","IsSpace","Region","Analysis","Colormap"])
+          "Region":region,"Analysis":analysis,"Colormap":colormap,"Longname":longname}
+    df = pd.DataFrame(df,columns=["Filename","Variable","Model","IsTime","IsSpace","Region","Analysis","Colormap",
+                                  "Longname"])
     df = find_plot_limits(df)
     df['Plot Name'] = [p[0] for p in df.Variable.str.split("_")]
     return df
@@ -107,20 +119,71 @@ def find_plot_limits(df,percentile=[1,99]):
     df['Plot Min'] = vmin
     df['Plot Max'] = vmax
     return df
+
+def generate_jsplotly_curves(df):
+    """
+
+    """
+    def _genTrace(filename,varname,mname,rname,pname,cname):
+        v = Variable(filename=filename,varname=varname)
+        t = v.ds[v.ds[v.varname].dims[0]]
+        if np.issubdtype(t,float):
+            x = ",".join([str(float(i)) for i in t])
+        else:
+            x = ",".join(['"%s"' % i.values for i in t.dt.strftime("%Y-%m-%d")])
+        da = v.ds[v.varname]
+        y = ",".join(["%g" % t for t in da])
+        trace = """        
+var %s_%s_%s = {
+  x: [%s],
+  y: [%s],
+  mode: 'lines',
+  name: '%s',
+  line: { color: '%s' }
+};""" % (pname,mname,rname,x,y,mname,cname)
+        return trace
+
+    traces = ""
+    for (plotname,region),dfg in df[df.IsTime & ~df.IsSpace].groupby(["Plot Name","Region"]):
+        for i,r in dfg.iterrows():
+            traces += _genTrace(r['Filename'],r['Variable'],r['Model'],r['Region'],
+                                r['Plot Name'],r['Colormap'])
+    return traces
     
 def generate_scalar_database(csvfiles):
     """Build a single pandas dataframe with all scalar information.
 
     """
     df = [pd.read_csv(f) for f in csvfiles]
-    df = pd.concat(df,ignore_index=True).drop_duplicates(['Model','Region','ScalarName'])
+    df = pd.concat(df,ignore_index=True).drop_duplicates(['Model','Region','ScalarName'])    
     return df
+
+def convert_scalars_to_str(dfs):
+    """
+    # determine preferred column order
+    analyses = df.Analysis.unique()
+    columns = []
+    for stype in ['scalar','score']:
+        for a in analyses:
+            columns += list(df[(df.Analysis==a)&(df.ScalarType==stype)].ScalarName.unique())
+    columns += ['Overall Score']
+    """
+    df = dfs.copy()
+    df['Data'] = df['Data'].apply('{:,.3g}'.format)
+    df['ScalarName'] += " [" + df['Units'] + "]"
+    out = []
+    for i,r in df.iterrows():
+        d = dict(id=i)
+        d.update(dict(r))
+        out.append(d)
+    out = str(out).replace(" nan"," NaN")
+    return out
+        
     
 if __name__ == "__main__":
     import glob
     dfp = generate_plot_database(glob.glob("_build/gpp/FLUXCOM/*.nc"),cmap="Greens")
+    #print(generate_jsplotly_curves(dfp))
     dfs = generate_scalar_database(glob.glob("_build/gpp/FLUXCOM/*.csv"))
-
-    
-
-    
+    print(convert_scalars_to_str(dfs))
+        
