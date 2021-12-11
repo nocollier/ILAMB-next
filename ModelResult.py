@@ -5,6 +5,41 @@ import numpy as np
 import os
 import re
 
+def compute_multimodel_mean(V):
+    """
+    for now require spatial grids are fixed
+    assume we have spatio-temporal data
+    """
+    tb = [V[v].timeBounds() for v in V]
+    t0 = max([t[0] for t in tb])
+    tf = min([t[1] for t in tb])
+    for v in V: V[v].ds = V[v].ds.sel(time=slice(t0,tf))
+    for a in V:
+        A = V[a]
+        for b in V:
+            B = V[b]
+            assert A.ds[A.varname].shape == B.ds[B.varname].shape
+    ds = xr.concat([V[v].ds for v in V],dim='model').mean(dim='model')
+    mn = Variable(da=ds[A.varname],varname=A.varname,
+                  cell_measure=A.ds['cell_measure'],time_measure=A.ds['time_measure'])
+    mn.ds[mn.varname].attrs = A.ds[A.varname].attrs
+    return mn
+
+def compute_time_measure(ds):
+    """
+    this is duplicate code from inside Variable
+    """
+    dt = None
+    tb_name = None
+    if "bounds" in ds['time'].attrs: tb_name = ds['time'].attrs['bounds']
+    if tb_name is not None and tb_name in ds:
+        dt = ds[tb_name]
+        nb = dt.dims[-1]
+        dt = dt.diff(nb).squeeze()
+        dt *= 1e-9/86400 # [ns] to [d]
+        dt  = dt.astype('float')
+    return dt
+
 class ModelResult():
     """
     name
@@ -45,6 +80,9 @@ class ModelResult():
                 s += "  + %s\n" % (v)                
         return s
 
+    def __repr__(self):
+        return self.__str__()
+    
     def _byRegex(self,group_regex):
         """
         """
@@ -174,7 +212,7 @@ class ModelResult():
         for child in self.children:
             v[child] = self.children[child]._getVariableChild(vname,**kwargs)
         if mean:
-            vmean = MultiModelMean(v)
+            vmean = compute_multimodel_mean(v)
             return v,vmean
         return v
 
@@ -200,11 +238,10 @@ class ModelResult():
         infinite recursion. This is where we should do all the
         trimming / checking of sites, etc.
         """
+        # Even if multifile, we need to peak at attributes from one file
         V = sorted(self.variables[vname])
         if len(V) == 0:
             raise ValueError("No %s file available in %s" % (vname,self.name))
-        elif len(V) > 1:
-            raise ValueError("Variable does not support multifile datasets")
         else:
             dset = xr.open_dataset(V[0])
         v = dset[vname]
@@ -219,9 +256,20 @@ class ModelResult():
             if "cell_methods" in v.attrs and area is not None:
                 if ("where land" in v.attrs["cell_methods"] and
                     self.frac_lnd is not None): area *= self.frac_lnd
+
         t0 = kwargs.get("t0",None)
         tf = kwargs.get("tf",None)
-        v = Variable(filename=V[0],varname=vname,cell_measure=area,t0=t0,tf=tf)
+        if len(V) == 1:
+            v = Variable(filename=V[0],varname=vname,cell_measure=area,t0=t0,tf=tf)
+        else:
+            V = [xr.open_dataset(v).sel(time=slice(t0,tf)) for v in V]
+            V = sorted([v for v in V if v.time.size>0],key=lambda a:a.time[0])
+            try:
+                ds = xr.concat(V,dim='time')
+            except:
+                msg = "Could not concat variable '%s' from files:\n  %s" % (vname,"\n  ".join(sorted(self.variables[vname])))
+                raise ValueError(msg)
+            v = Variable(da=ds[vname],varname=vname,cell_measure=area,time_measure=compute_time_measure(ds))
             
         latlon = kwargs.get("latlon",None)
         if latlon is not None:
