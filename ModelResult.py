@@ -10,19 +10,18 @@ def compute_multimodel_mean(V):
     for now require spatial grids are fixed
     assume we have spatio-temporal data
     """
+    v0 = V[list(V.keys())[0]]
     tb = [V[v].timeBounds() for v in V]
     t0 = max([t[0] for t in tb])
     tf = min([t[1] for t in tb])
-    for v in V: V[v].ds = V[v].ds.sel(time=slice(t0,tf))
-    for a in V:
-        A = V[a]
-        for b in V:
-            B = V[b]
-            assert A.ds[A.varname].shape == B.ds[B.varname].shape
-    ds = xr.concat([V[v].ds for v in V],dim='model').mean(dim='model')
-    mn = Variable(da=ds[A.varname],varname=A.varname,
-                  cell_measure=A.ds['cell_measure'],time_measure=A.ds['time_measure'])
-    mn.ds[mn.varname].attrs = A.ds[A.varname].attrs
+    ds = [V[v].ds.sel(time=slice(t0,tf)) for v in V]
+    ds = xr.align(*ds,join='override')
+    ds = xr.concat(ds,dim='model').mean(dim='model')
+    mn = Variable(da           = ds[v0.varname],
+                  varname      = v0.varname,
+                  cell_measure = ds['cell_measure'],
+                  time_measure = ds['time_measure'])
+    mn.ds[mn.varname].attrs = v0.ds[v0.varname].attrs
     return mn
 
 def compute_time_measure(ds):
@@ -46,7 +45,7 @@ class ModelResult():
     """
     def __init__(self,path,**kwargs):
 
-        # 
+        #
         self.name = kwargs.get("name","model")
         self.color = (0,0,0)
 
@@ -77,12 +76,12 @@ class ModelResult():
                 s += "  + %s\n" % (child)
         else:
             for v in sorted(self.variables,key=lambda k: k.lower()):
-                s += "  + %s\n" % (v)                
+                s += "  + %s\n" % (v)
         return s
 
     def __repr__(self):
         return self.__str__()
-    
+
     def _byRegex(self,group_regex):
         """
         """
@@ -245,7 +244,7 @@ class ModelResult():
         else:
             dset = xr.open_dataset(V[0])
         v = dset[vname]
-            
+
         # Scan attributes for cell measure information
         area = None
         if "cell_measures" in v.attrs and vname not in ["areacella","areacello"]:
@@ -270,7 +269,7 @@ class ModelResult():
                 msg = "Could not concat variable '%s' from files:\n  %s" % (vname,"\n  ".join(sorted(self.variables[vname])))
                 raise ValueError(msg)
             v = Variable(da=ds[vname],varname=vname,cell_measure=area,time_measure=compute_time_measure(ds))
-            
+
         latlon = kwargs.get("latlon",None)
         if latlon is not None:
             raise ValueError("Datasite extraction not yet implemented")
@@ -278,7 +277,7 @@ class ModelResult():
             if v.lon.data.max() > 180:
                 if lon < 0: lon += 360
             v = v.sel(lat=lat,lon=lon,method='nearest')
-            
+
         return v
 
     def _getVariableExpression(self,vname,expr,**kwargs):
