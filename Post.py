@@ -49,7 +49,7 @@ def get_colormap(da,cmap=None):
 
     """
     if "cmap"  in da.attrs: return da.attrs["cmap"]
-    if "score" in da.name:  return "winter"
+    if "score" in da.name:  return "plasma"
     if "bias"  in da.name:  return "seismic"
     if "rmse"  in da.name:  return "Oranges"
     if "shift" in da.name:  return "PRGn"

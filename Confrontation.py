@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import xarray as xr
 from Post import generate_plot_database
+from Regions import Regions
+
+ilamb_regions = Regions()
 
 def is_spatially_aligned(a,b):
     """Are the lats and lons of a and b aligned?
@@ -126,9 +129,9 @@ def add_analysis_name(name,*args):
             v.ds[v.varname].attrs['analysis'] = name
     return args
 
-def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
+def ScoreBias(r0,c0,r=None,c=None,regions=[None],df_bias=None):
     """
-
+    
     """
     v = r0.varname
     aname = "Bias"
@@ -139,27 +142,53 @@ def ScoreBias(r0,c0,r=None,c=None,regions=[None]):
     cm0 = c0.integrate(dim='time',mean=True) if c0.temporal() else c0
     rm0.setAttr("longname","Temporal Mean")
     cm0.setAttr("longname","Temporal Mean")
-    
-    # if we have temporal data, the normalizer is the std
-    norm0 = r0.std(dim='time') if r0.ds['time'].size > 1 else rm0
+            
+    if df_bias is None: # as in (Collier, et al., JAMES, 2018)
 
-    # interpolate to a nested grid
-    rm,cm,norm = rm0.nestSpatialGrids(cm0,norm0)
-    bias = cm-rm
-    bias.setAttr("longname","Bias")
+        # if we have temporal data, the normalizer is the std
+        norm0 = r0.std(dim='time') if r0.ds['time'].size > 1 else rm0
     
-    # do we have reference uncertainties?
-    ru = rm.uncertainty()
-    un = 0 if ru is None else ru.ds[ru.varname]
+        # interpolate to a nested grid
+        rm,cm,norm = rm0.nestSpatialGrids(cm0,norm0)
+        bias = cm-rm
+        bias.setAttr("longname","Bias")
     
-    # compute the bias score
-    eps  = cm-rm    
-    eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)
-    eps.ds[eps.varname].attrs['units'] = cm.units()
-    eps /= norm
-    eps.ds[eps.varname] = np.exp(-eps.ds[eps.varname])
-    eps.setAttr("longname","Bias Score")
-    
+        # do we have reference uncertainties?
+        ru = rm.uncertainty()
+        un = 0 if ru is None else ru.ds[ru.varname]
+
+        # compute the bias score
+        eps  = cm-rm    
+        eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)
+        eps.ds[eps.varname].attrs['units'] = cm.units()
+        eps /= norm
+        eps.ds[eps.varname] = np.exp(-eps.ds[eps.varname])
+        eps.setAttr("longname","Bias Score")
+
+    else: # new methodology based on bias quantiles
+
+        # interpolate to a nested grid
+        rm,cm = rm0.nestSpatialGrids(cm0)
+        bias = cm-rm
+        bias.setAttr("longname","Bias")
+
+        # do we have reference uncertainties?
+        ru = rm.uncertainty()
+        un = 0 if ru is None else ru.ds[ru.varname]
+        
+        # build up the score
+        eps = cm-rm
+        eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)
+        for region in df_bias.region.unique():
+            mask = ilamb_regions.getMask(region,bias)
+            val  = float(df_bias.loc[(df_bias.variable   == v) &
+                                     (df_bias.region     == region) &
+                                     (df_bias.percentile == 98),'bias'])            
+            eps.ds[eps.varname] /= xr.where(mask,1,val)
+        eps.ds[eps.varname] = (1-np.abs(eps.ds[eps.varname])).clip(0,1)
+        eps.setAttr("units","1")
+        eps.setAttr("longname","Bias Score")
+        
     # populate scalars over regions
     df = []
     for region in regions:
@@ -210,6 +239,8 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
     rmse.setAttr("longname","RMSE")
     r = r.detrend(degree=0)
     c = c.detrend(degree=0)
+    crmse = r.rmse(c)
+    crmse.setAttr("longname","Centralized RMSE")    
     eps = c-r
     del c,r
     eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)**2
@@ -224,6 +255,7 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
     r_plot = {}
     c_plot = {
         'rmse_map_of_%s'      % v: rmse,
+        'crmse_map_of_%s'     % v: crmse,
         'rmsescore_map_of_%s' % v: eps
     }
     df = []
@@ -334,6 +366,7 @@ class Confrontation(object):
         self.master   = kwargs.get(  "master",True)
         self.path     = kwargs.get(    "path","./")
         self.cmap     = kwargs.get(    "cmap",None)
+        self.df_bias  = kwargs.get( "df_bias",None)
         self.df_plot  = None
         assert self.source is not None
         if not os.path.isfile(self.source):
@@ -378,7 +411,7 @@ class Confrontation(object):
 
         # bias scoring
         if not skip_bias:
-            rp,cp,df = ScoreBias(r0,c0,regions=self.regions)
+            rp,cp,df = ScoreBias(r0,c0,regions=self.regions,df_bias=self.df_bias)
             rplot.update(rp); cplot.update(cp); dfm.append(df)
 
         # rmse scoring
@@ -463,35 +496,41 @@ def assign_model_colors(M):
 if __name__ == "__main__":
     from ModelResult import ModelResult
     import time
-    
+
+    from Regions import Regions
+    Regions().addRegionNetCDF4("/home/nate/data/ILAMB/DATA/regions/Whittaker.nc")
+        
     M = [ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CESM2"  ,name="CESM2"  ),
          ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5",name="CanESM5")]
     for m in M:
         m.findFiles()
         m.getGridInformation()
     assign_model_colors(M)
-    
+
+    df = pd.read_pickle('cmip5v6_bias_quantiles.pkl')
     C = [Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXNET2015/gpp.nc",
                        variable = "gpp",
                        unit = "g m-2 d-1",
-                       regions = [None,"nhsa"],
-                       path = "./_build/gpp/FLUXNET2015"),
+                       #regions = [None,"nhsa"],
+                       path = "./_build/gpp/FLUXNET2015",
+                       df_bias = df),
          Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc",
                        variable = "gpp",
                        unit = "g m-2 d-1",
-                       regions = [None,"nhsa"],
+                       #regions = [None,"nhsa"],
                        cmap = "Greens",
-                       path = "./_build/gpp/FLUXCOM"),
+                       path = "./_build/gpp/FLUXCOM",
+                       df_bias = df),
          Confrontation(source = "/home/nate/work/ILAMB-Data/CLASS/pr.nc",
                        variable = "pr",
                        unit = "kg m-2 d-1",
                        path = "./_build/pr/CLASS/")]
-    for c in C[1:2]:
+    for c in C[:2]:
         print(c.source,c.variable)
         for m in M:
             t0 = time.time()
             print("  %10s" % (m.name),end=' ',flush=True)
-            #c.confront(m)
+            c.confront(m,skip_rmse=False,skip_cycle=True,skip_sd=True)
             dt = time.time()-t0
             print("%.0f" % dt)
         for m in M:
@@ -501,3 +540,5 @@ if __name__ == "__main__":
             dt = time.time()-t0
             print("%.0f" % dt)
         c.plotReference()
+
+

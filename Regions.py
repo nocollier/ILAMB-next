@@ -88,7 +88,15 @@ class Regions(object):
         regions : list of str
             a list of the keys of the regions added.
         """
-        raise ValueError("Not implemented")
+        rtype = 1
+        ds = xr.load_dataset(filename)
+        labels = list(ds[ds['ids'].attrs['labels']].to_numpy())
+        names  = list(ds[ds['ids'].attrs['names' ]].to_numpy())
+        for label,name in zip(labels,names):
+            da = xr.where(ds['ids']==labels.index(label),1,0)
+            Regions._regions[label] = [rtype,name,da]
+            Regions._sources[label] = os.path.basename(filename)
+        return labels
 
     def getRegionName(self,label):
         """Given the region label, return the full name.
@@ -146,6 +154,10 @@ class Regions(object):
             ds = var.ds.drop_vars([u for u in var.ds if u not in keep])
             ds = xr.where((lat>=rlat[0])*(lat<=rlat[1])*(lon>=rlon[0])*(lon<=rlon[1]),ds,np.nan)
             return ds
+        elif rtype == 1:
+            rtype,rname,da = rdata
+            out = da.interp(lat=var.ds[var.lat_name],lon=var.ds[var.lon_name],method='nearest')
+            return out==False
         msg = "Region type #%d not recognized" % rtype
         raise ValueError(msg)
 
