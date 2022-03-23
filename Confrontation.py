@@ -239,6 +239,8 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
     rmse.setAttr("longname","RMSE")
     r = r.detrend(degree=0)
     c = c.detrend(degree=0)
+    crmse = r.rmse(c)
+    crmse.setAttr("longname","Centralized RMSE")    
     eps = c-r
     del c,r
     eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)**2
@@ -253,6 +255,7 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
     r_plot = {}
     c_plot = {
         'rmse_map_of_%s'      % v: rmse,
+        'crmse_map_of_%s'     % v: crmse,
         'rmsescore_map_of_%s' % v: eps
     }
     df = []
@@ -527,9 +530,9 @@ if __name__ == "__main__":
         for m in M:
             t0 = time.time()
             print("  %10s" % (m.name),end=' ',flush=True)
-            c.confront(m,skip_rmse=True,skip_cycle=True,skip_sd=True)
+            c.confront(m,skip_rmse=False,skip_cycle=True,skip_sd=True)
             dt = time.time()-t0
-            print("%.0f" % dt)    
+            print("%.0f" % dt)
         for m in M:
             t0 = time.time()
             print("  %10s" % (m.name),end=' ',flush=True)
