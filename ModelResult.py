@@ -4,6 +4,16 @@ import xarray as xr
 import numpy as np
 import os
 import re
+import cftime
+
+def same_space_grid(V):
+    """
+    are the variables all on the same spatial grid?
+    """
+    v0 = V[list(V.keys())[0]]
+    if not np.all([V[v].ds[V[v].lat_name].size == v0.ds[v0.lat_name].size for v in V]): return False
+    if not np.all([V[v].ds[V[v].lon_name].size == v0.ds[v0.lon_name].size for v in V]): return False
+    return True
 
 def compute_multimodel_mean(V):
     """
@@ -11,16 +21,33 @@ def compute_multimodel_mean(V):
     assume we have spatio-temporal data
     """
     v0 = V[list(V.keys())[0]]
-    tb = [V[v].timeBounds() for v in V]
-    t0 = max([t[0] for t in tb])
-    tf = min([t[1] for t in tb])
-    ds = [V[v].ds.sel(time=slice(t0,tf)) for v in V]
+    ds = [V[v].ds for v in V]
+    tm = None
+    if v0.temporal():
+        tb = []
+        for v in V:
+            V[v].ds['time'] = [cftime.DatetimeNoLeap(t.dt.year,t.dt.month,t.dt.day) for t in V[v].ds['time']]
+            tbnd = V[v].timeBounds()
+            tb.append(tbnd)
+        t0 = max([t[0] for t in tb])
+        tf = min([t[1] for t in tb])
+        t0 = cftime.DatetimeNoLeap(t0.dt.year,t0.dt.month,1)
+        tf = cftime.DatetimeNoLeap(tf.dt.year,tf.dt.month,28)
+        ds = [d.sel(time=slice(t0,tf)) for d in ds]
+        tm = ds[0]['time_measure']
+    if v0.spatial() and not same_space_grid(V):
+        res = 1.0        
+        lat = np.linspace(-90, 90,int(round(180/res))+1)
+        lon = np.linspace(  0,360,int(round(360/res))+1)
+        lat = 0.5*(lat[:-1]+lat[1:])
+        lon = 0.5*(lon[:-1]+lon[1:])
+        ds  = [d.interp(coords={'lat':lat,'lon':lon},method='nearest') for d in ds]
+    ds = [d[v0.varname] for d in ds]
     ds = xr.align(*ds,join='override')
     ds = xr.concat(ds,dim='model').mean(dim='model')
-    mn = Variable(da           = ds[v0.varname],
+    mn = Variable(da           = ds,
                   varname      = v0.varname,
-                  cell_measure = ds['cell_measure'],
-                  time_measure = ds['time_measure'])
+                  time_measure = tm)
     mn.ds[mn.varname].attrs = v0.ds[v0.varname].attrs
     return mn
 
@@ -106,9 +133,9 @@ class ModelResult():
         for v in self.variables.keys():
             to_remove = []
             for f in self.variables[v]:
-                with Dataset(f) as dset:
-                    if group_attr in dset.ncattrs():
-                        g = dset.getncattr(group_attr)
+                with xr.open_dataset(f) as dset:
+                    if group_attr in dset.attrs:
+                        g = dset.attrs[group_attr]
                         if g not in groups: groups[g] = {}
                         if v not in groups[g]: groups[g][v] = []
                         groups[g][v].append(f)
@@ -209,7 +236,11 @@ class ModelResult():
         if not self.children: return self._getVariableChild(vname,**kwargs)
         v = {}
         for child in self.children:
-            v[child] = self.children[child]._getVariableChild(vname,**kwargs)
+            try:
+                v[child] = self.children[child]._getVariableChild(vname,**kwargs)
+            except:
+                pass
+        if len(v)==0: raise ValueError("Cannot find '%s' in '%s'" % (vname,self.name))
         if mean:
             vmean = compute_multimodel_mean(v)
             return v,vmean
