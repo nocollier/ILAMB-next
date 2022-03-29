@@ -24,7 +24,7 @@ def is_spatially_aligned(a,b):
 
 def pick_grid_aligned(r0,c0,r,c):
     """Pick variables for r and c such that they are grid aligned without recomputing if not needed.
-    
+
     """
     if is_spatially_aligned(r0,c0): return r0,c0
     if (r is not None) and (c is not None):
@@ -44,6 +44,35 @@ def adjust_lon(a,b):
     elif not a360 and b360:
         b.ds[b.lon_name] = (b.ds[b.lon_name]+180) % 360-180
         b.ds = b.ds.sortby(b.lon_name)
+    return a,b
+
+def make_time_comparable(a,b):
+    """The time dimension must be in a comporable format.
+
+    """
+    if 'time' not in a.ds[a.varname].dims: return a,b
+    if 'time' not in b.ds[b.varname].dims: return a,b
+    for v in [a,b]:
+        v.ds['time'] = pd.to_datetime(v.ds['time'].dt.strftime("%Y-%m-%d %H:%M"))
+        if 'bounds' in v.ds['time'].attrs:
+            tb = v.ds['time'].attrs['bounds']
+            if tb in v.ds:
+                v.ds[tb] = pd.to_datetime(v.ds[tb].dt.strftime("%Y-%m-%d %H:%M"))
+    return a,b
+
+def trim_time(a,b):
+    """When comparing b to a, we need only the maximal amount of temporal overlap.
+
+    """
+    if 'time' not in a.ds[a.varname].dims: return a,b
+    if 'time' not in b.ds[b.varname].dims: return a,b
+    at0,atf = a.timeBounds()
+    bt0,btf = b.timeBounds()
+    tol = int(1*24*3600*1e9) # 1 day in nanoseconds 
+    t0 = max(at0,bt0)-tol
+    tf = min(atf,btf)+tol
+    a.ds = a.ds.sel(time=slice(t0,tf))
+    b.ds = b.ds.sel(time=slice(t0,tf))
     return a,b
 
 def sanitize_into_dataset(d):
@@ -90,7 +119,7 @@ def sanitize_into_dataset(d):
             da = v.ds[v.varname]
             ds[name] = da.rename({'time':t_name})
         t_name += "_"
-        
+
     # make sure we dealt with everything
     assert(len(set(d.keys()).difference(set(ds.keys())))==0)
     keep = ['_FillValue','units','ilamb','analysis','region','longname']
@@ -129,36 +158,36 @@ def add_analysis_name(name,*args):
             v.ds[v.varname].attrs['analysis'] = name
     return args
 
-def ScoreBias(r0,c0,r=None,c=None,regions=[None],df_bias=None):
+def ScoreBias(r0,c0,r=None,c=None,regions=[None],df_errs=None):
     """
-    
+
     """
     v = r0.varname
     aname = "Bias"
     sdim = "site" if r0.sites() else "space"
-    
+
     # period means on original grids
     rm0 = r0.integrate(dim='time',mean=True) if r0.temporal() else r0
     cm0 = c0.integrate(dim='time',mean=True) if c0.temporal() else c0
     rm0.setAttr("longname","Temporal Mean")
     cm0.setAttr("longname","Temporal Mean")
-            
-    if df_bias is None: # as in (Collier, et al., JAMES, 2018)
+
+    if df_errs is None: # as in (Collier, et al., JAMES, 2018)
 
         # if we have temporal data, the normalizer is the std
         norm0 = r0.std(dim='time') if r0.ds['time'].size > 1 else rm0
-    
+
         # interpolate to a nested grid
         rm,cm,norm = rm0.nestSpatialGrids(cm0,norm0)
         bias = cm-rm
         bias.setAttr("longname","Bias")
-    
+
         # do we have reference uncertainties?
         ru = rm.uncertainty()
         un = 0 if ru is None else ru.ds[ru.varname]
 
         # compute the bias score
-        eps  = cm-rm    
+        eps  = cm-rm
         eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)
         eps.ds[eps.varname].attrs['units'] = cm.units()
         eps /= norm
@@ -175,20 +204,20 @@ def ScoreBias(r0,c0,r=None,c=None,regions=[None],df_bias=None):
         # do we have reference uncertainties?
         ru = rm.uncertainty()
         un = 0 if ru is None else ru.ds[ru.varname]
-        
+
         # build up the score
         eps = cm-rm
         eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)
-        for region in df_bias.region.unique():
+        for region in df_errs.region.unique():
             mask = ilamb_regions.getMask(region,bias)
-            val  = float(df_bias.loc[(df_bias.variable   == v) &
-                                     (df_bias.region     == region) &
-                                     (df_bias.percentile == 98),'bias'])            
+            val  = float(df_errs.loc[(df_errs.variable   == v) &
+                                     (df_errs.region     == region) &
+                                     (df_errs.percentile == 98),'bias'])
             eps.ds[eps.varname] /= xr.where(mask,1,val)
         eps.ds[eps.varname] = (1-np.abs(eps.ds[eps.varname])).clip(0,1)
         eps.setAttr("units","1")
         eps.setAttr("longname","Bias Score")
-        
+
     # populate scalars over regions
     df = []
     for region in regions:
@@ -215,42 +244,74 @@ def ScoreBias(r0,c0,r=None,c=None,regions=[None],df_bias=None):
     r_plot,c_plot = add_analysis_name(aname,r_plot,c_plot)
     return r_plot,c_plot,df
 
-def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
+def ScoreRMSE(r0,c0,r=None,c=None,regions=[None],df_errs=None):
     """
 
     """
     v = r0.varname
     aname = "RMSE"
     sdim = "site" if r0.sites() else "space"
-    
+
     # validity checks
     if r0.ds['time'].size < 12: return {},{},[]
 
-    # get normalizer and regrid
-    norm0 = r0.std(dim='time')
-    r,c,norm = r0.nestSpatialGrids(c0,norm0)
+    if df_errs is None: # as in (Collier, et al., JAMES, 2018)
+        
+        # get normalizer and regrid
+        norm0 = r0.std(dim='time')
+        r,c,norm = r0.nestSpatialGrids(c0,norm0)
 
-    # do we have reference uncertainties?
-    ru = r.uncertainty()
-    un = 0 if ru is None else ru.ds[ru.varname]
+        # do we have reference uncertainties?
+        ru = r.uncertainty()
+        un = 0 if ru is None else ru.ds[ru.varname]
 
-    # compute the RMSE error and score
-    rmse = r.rmse(c)
-    rmse.setAttr("longname","RMSE")
-    r = r.detrend(degree=0)
-    c = c.detrend(degree=0)
-    crmse = r.rmse(c)
-    crmse.setAttr("longname","Centralized RMSE")    
-    eps = c-r
-    del c,r
-    eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)**2
-    eps.ds[eps.varname].attrs['units'] = "1"
-    eps = eps.integrate(dim='time',mean=True)
-    eps /= norm
-    eps.ds[eps.varname] = np.exp(-eps.ds[eps.varname])    
-    eps.ds[eps.varname].attrs['units'] = "1"
-    eps.setAttr("longname","RMSE Score")
-    
+        # compute the RMSE error and score
+        rmse = r.rmse(c)
+        rmse.setAttr("longname","RMSE")
+        r = r.detrend(degree=0)
+        c = c.detrend(degree=0)
+        crmse = r.rmse(c)
+        crmse.setAttr("longname","Centralized RMSE")
+        eps = c-r
+        del c,r
+        eps.ds[eps.varname] = (np.abs(eps.ds[eps.varname])-un).clip(0)**2
+        eps.ds[eps.varname].attrs['units'] = "1"
+        eps = eps.integrate(dim='time',mean=True)
+        eps /= norm
+        eps.ds[eps.varname] = np.exp(-eps.ds[eps.varname])
+        eps.ds[eps.varname].attrs['units'] = "1"
+        eps.setAttr("longname","RMSE Score")
+
+    else:
+
+        # interpolate to a nested grid
+        r,c = r0.nestSpatialGrids(c0)
+
+        # do we have reference uncertainties?
+        ru = r.uncertainty()
+        un = 0 if ru is None else ru.ds[ru.varname]
+
+        # compute the RMSE error and score
+        rmse = r.rmse(c)
+        rmse.setAttr("longname","RMSE")
+        r = r.detrend(degree=0)
+        c = c.detrend(degree=0)
+        crmse = r.rmse(c)
+        crmse.setAttr("longname","Centralized RMSE")
+
+        # build up the score
+        eps = r.rmse(c,uncertainty=un)
+        del c,r
+        for region in df_errs.region.unique():
+            mask = ilamb_regions.getMask(region,crmse)
+            val  = float(df_errs.loc[(df_errs.variable   == v) &
+                                     (df_errs.region     == region) &
+                                     (df_errs.percentile == 98),'crmse'])
+            eps.ds[eps.varname] /= xr.where(mask,1,val)
+        eps.ds[eps.varname] = (1-np.abs(eps.ds[eps.varname])).clip(0,1)
+        eps.setAttr("units","1")
+        eps.setAttr("longname","RMSE Score")
+
     # collect output for intermediate files
     r_plot = {}
     c_plot = {
@@ -267,7 +328,7 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None]):
         df.append(['model',str(region),aname,'RMSE','scalar',s.units(),float(s.ds[s.varname].values)])
         s = eps.integrate(sdim,mean=True,region=region)
         df.append(['model',str(region),aname,'RMSE Score','score',s.units(),float(s.ds[s.varname].values)])
-    df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])        
+    df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])
     r_plot,c_plot = add_analysis_name(aname,r_plot,c_plot)
     return r_plot,c_plot,df
 
@@ -279,7 +340,7 @@ def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
     v = r0.varname
     aname = "Annual Cycle"
     sdim = "site" if r0.sites() else "space"
-    
+
     # compute cycle and month of maximum
     rc0 = r0 if r0.ds['time'].size==12 else r0.cycle()
     cc0 = c0 if c0.ds['time'].size==12 else c0.cycle()
@@ -287,25 +348,25 @@ def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
     cmx0 = cc0.maxMonth()
     rmx0.setAttr("longname","Month of Maximum")
     cmx0.setAttr("longname","Month of Maximum")
-    
+
     # phase shift on nested grid
     rmx,cmx = rmx0.nestSpatialGrids(cmx0)
     ps = cmx-rmx
-    
+
     # manually fix the phase shift to [-6,+6]
     attrs = ps.ds[ps.varname].attrs
     ps.ds[ps.varname] = xr.where(ps.ds[ps.varname]<-6,ps.ds[ps.varname]+12,ps.ds[ps.varname])
     ps.ds[ps.varname] = xr.where(ps.ds[ps.varname]>+6,ps.ds[ps.varname]-12,ps.ds[ps.varname])
     ps.ds[ps.varname].attrs = attrs
     ps.setAttr("longname","Phase Shift")
-    
+
     # compute score
     score = Variable(da = xr.apply_ufunc(lambda a: 1-np.abs(a)/6,ps.ds[ps.varname]),
                      varname = "shiftscore_map_of_%s" % v,
                      cell_measure = ps.ds['cell_measure'] if 'cell_measure' in ps.ds else None)
     score.ds[score.varname].attrs['units'] ='1'
     score.setAttr("longname","Seasonal Cycle Score")
-    
+
     # collect output for intermediate files
     r_plot = {
         'phase_map_of_%s' % v: rmx0
@@ -323,7 +384,7 @@ def ScoreCycle(r0,c0,r=None,c=None,regions=[None]):
         df.append(['model',str(region),aname,'Phase Shift','scalar',s.units(),float(s.ds[s.varname].values)])
         s = score.integrate(sdim,mean=True,region=region)
         df.append(['model',str(region),aname,'Seasonal Cycle Score','score',s.units(),float(s.ds[s.varname].values)])
-    df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])        
+    df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])
     r_plot,c_plot = add_analysis_name(aname,r_plot,c_plot)
     return r_plot,c_plot,df
 
@@ -344,7 +405,7 @@ def ScoreSpatialDistribution(r0,c0,r=None,c=None,regions=[None]):
         df.append(['model',str(region),aname,'Spatial Normalized Standard Deviation','scalar','1',std])
         df.append(['model',str(region),aname,'Spatial Correlation'                  ,'scalar','1',corr])
         df.append(['model',str(region),aname,'Spatial Distribution Score'           ,'score' ,'1',score])
-    df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])        
+    df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])
     return {},{},df
 
 class Confrontation(object):
@@ -366,27 +427,31 @@ class Confrontation(object):
         self.master   = kwargs.get(  "master",True)
         self.path     = kwargs.get(    "path","./")
         self.cmap     = kwargs.get(    "cmap",None)
-        self.df_bias  = kwargs.get( "df_bias",None)
+        self.df_errs  = kwargs.get( "df_errs",None)
         self.df_plot  = None
         assert self.source is not None
         if not os.path.isfile(self.source):
             msg = "Cannot find the source, tried looking here: '%s'" % self.source
             raise ValueError(msg)
         if not os.path.isdir(self.path): os.makedirs(self.path)
-        
+
     def stageData(self,m):
         """
-        
+
         """
         r = Variable(filename=self.source,varname=self.variable)
         if self.unit is not None: r.convert(self.unit)
         t0,tf = r.timeBounds()
+        if type(t0) != str: t0 = str(t0.values)
+        if type(tf) != str: tf = str(tf.values)
         c = m.getVariable(self.variable,t0=t0,tf=tf)
         c.convert(r.units())
+        r,c = make_time_comparable(r,c)
+        r,c = trim_time(r,c)
         r,c = adjust_lon(r,c)
         if r.sites() and c.spatial(): c = c.extractSites(r)
         return r,c
-    
+
     def confront(self,m,**kwargs):
         """
         skip_bias
@@ -399,7 +464,7 @@ class Confrontation(object):
         skip_rmse  = kwargs.get( 'skip_rmse',False)
         skip_cycle = kwargs.get('skip_cycle',False)
         skip_sd    = kwargs.get(   'skip_sd',False)
-                
+
         # initialize, detect what analyses are inappropriate
         r0,c0 = self.stageData(m)
         if not r0.temporal():
@@ -411,14 +476,14 @@ class Confrontation(object):
 
         # bias scoring
         if not skip_bias:
-            rp,cp,df = ScoreBias(r0,c0,regions=self.regions,df_bias=self.df_bias)
+            rp,cp,df = ScoreBias(r0,c0,regions=self.regions,df_errs=self.df_errs)
             rplot.update(rp); cplot.update(cp); dfm.append(df)
 
         # rmse scoring
         if not skip_rmse:
-            rp,cp,df = ScoreRMSE(r0,c0,regions=self.regions)
+            rp,cp,df = ScoreRMSE(r0,c0,regions=self.regions,df_errs=self.df_errs)
             rplot.update(rp); cplot.update(cp); dfm.append(df)
-                
+
         # cycle scoring
         if not skip_cycle:
             rp,cp,df = ScoreCycle(r0,c0,regions=self.regions)
@@ -431,7 +496,7 @@ class Confrontation(object):
             ci = cplot[name] if name in cplot else c0
             rp,cp,df = ScoreSpatialDistribution(ri,ci,regions=self.regions)
             rplot.update(rp); cplot.update(cp); dfm.append(df)
-        
+
         # compute overall score and output
         dfm = pd.concat([df for df in dfm if len(df)>0],ignore_index=True)
         dfm.Model[dfm.Model=='model'] = m.name
@@ -463,19 +528,19 @@ class Confrontation(object):
                 plt.gca().set_title(name + " " + r['Longname'])
                 plt.gcf().savefig(path)
                 plt.close()
-        
+
     def plotReference(self):
         """
 
         """
         self._plot()
-        
+
     def plotModel(self,m):
         """
 
         """
         self._plot(m)
-        
+
 def assign_model_colors(M):
     """Later migrate this elsewhere.
 
@@ -492,53 +557,71 @@ def assign_model_colors(M):
         raise ValueError(msg)
     for i,m in enumerate(M):
         m.color = clrs[i]
-    
+
 if __name__ == "__main__":
     from ModelResult import ModelResult
+    from Regions import Regions
     import time
 
-    from Regions import Regions
-    Regions().addRegionNetCDF4("/home/nate/data/ILAMB/DATA/regions/Whittaker.nc")
-        
-    M = [ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CESM2"  ,name="CESM2"  ),
-         ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CanESM5",name="CanESM5")]
+    ROOT = os.environ['ILAMB_ROOT']
+    Regions().addRegionNetCDF4(os.path.join(ROOT,"DATA/regions/Whittaker.nc"))
+
+    M = [
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP5/bcc-csm1-1"   ),name="bcc-csm1-1"   ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP5/CanESM2"      ),name="CanESM2"      ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP5/CESM1-BGC"    ),name="CESM1-BGC"    ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP5/GFDL-ESM2G"   ),name="GFDL-ESM2G"   ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP5/IPSL-CM5A-LR" ),name="IPSL-CM5A-LR" ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP5/MIROC-ESM"    ),name="MIROC-ESM"    ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP5/MPI-ESM-LR"   ),name="MPI-ESM-LR"   ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP5/NorESM1-ME"   ),name="NorESM1-ME"   ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP5/HadGEM2-ES"   ),name="UK-HadGEM2-ES"),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/BCC-CSM2-MR"  ),name="BCC-CSM2-MR"  ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/CanESM5"      ),name="CanESM5"      ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/CESM2"        ),name="CESM2"        ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/GFDL-ESM4"    ),name="GFDL-ESM4"    ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/IPSL-CM6A-LR" ),name="IPSL-CM6A-LR" ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/MIROC-ES2L"   ),name="MIROC-ES2L"   ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/MPI-ESM1.2-HR"),name="MPI-ESM1.2-HR"),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/NorESM2-LM"   ),name="NormESM2-LM"  ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/UKESM1-0-LL"  ),name="UKESM1-0-LL"  ),
+    ]
+    print("Initialize models...")
     for m in M:
         m.findFiles()
         m.getGridInformation()
+        print("  ",m.name)
     assign_model_colors(M)
 
-    df = pd.read_pickle('cmip5v6_bias_quantiles.pkl')
-    C = [Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXNET2015/gpp.nc",
+    df = pd.read_pickle('cmip5v6_errors.pkl')
+    C = [Confrontation(source = os.path.join(ROOT,"DATA/gpp/FLUXNET2015/gpp.nc"),
                        variable = "gpp",
                        unit = "g m-2 d-1",
                        #regions = [None,"nhsa"],
                        path = "./_build/gpp/FLUXNET2015",
-                       df_bias = df),
-         Confrontation(source = "/home/nate/data/ILAMB/DATA/gpp/FLUXCOM/tmp.nc",
+                       df_errs = df),
+         Confrontation(source = os.path.join(ROOT,"DATA/gpp/FLUXCOM/gpp.nc"),
                        variable = "gpp",
                        unit = "g m-2 d-1",
                        #regions = [None,"nhsa"],
                        cmap = "Greens",
                        path = "./_build/gpp/FLUXCOM",
-                       df_bias = df),
-         Confrontation(source = "/home/nate/work/ILAMB-Data/CLASS/pr.nc",
-                       variable = "pr",
-                       unit = "kg m-2 d-1",
-                       path = "./_build/pr/CLASS/")]
-    for c in C[:2]:
+                       df_errs = df)]
+    for c in C[1:2]:
         print(c.source,c.variable)
         for m in M:
             t0 = time.time()
-            print("  %10s" % (m.name),end=' ',flush=True)
-            c.confront(m,skip_rmse=False,skip_cycle=True,skip_sd=True)
-            dt = time.time()-t0
-            print("%.0f" % dt)
+            print("  %20s" % (m.name),end=' ',flush=True)
+            try:
+                c.confront(m,skip_bias=False,skip_rmse=False,skip_cycle=True,skip_sd=True)
+                dt = time.time()-t0
+                print("%.0f" % dt)
+            except:
+                print("fail")
         for m in M:
             t0 = time.time()
-            print("  %10s" % (m.name),end=' ',flush=True)
+            print("  %20s" % (m.name),end=' ',flush=True)
             c.plotModel(m)
             dt = time.time()-t0
             print("%.0f" % dt)
         c.plotReference()
-
-

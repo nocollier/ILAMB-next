@@ -116,7 +116,7 @@ class Variable():
             assert da is not None
             self.ds = xr.Dataset({self.varname:da})
             self.ds[self.varname].name = self.varname
-            
+
         # Measures may be given in the constructor, if not then we build them
         if 'time' in self.ds[self.varname].dims:
             dt = kwargs.get("time_measure",None)
@@ -227,14 +227,17 @@ class Variable():
                 t = self.ds[t.attrs['bounds']]
         return t.min(),t.max()
 
-    def rmse(self,other):
+    def rmse(self,other,uncertainty=0):
         """
 
         """
         out = other-self
+        out.ds[out.varname] = (np.abs(out.ds[out.varname])-uncertainty).clip(0)
         out.ds[out.varname] *= out.ds[out.varname]
+        out.setAttr('units',self.units())
         out = out.integrate(dim='time',mean=True)
         out.ds[out.varname] = np.sqrt(out.ds[out.varname])
+        out.setAttr('units',self.units())
         return out
         
     def uncertainty(self):
@@ -338,7 +341,7 @@ class Variable():
         if "cmap"   in kwargs: kwargs['cmap'] = plt.get_cmap(kwargs['cmap'],9)
         
         ds = self.ds
-        if region is not None: ds = ilamb_regions.getMask(region,self)
+        if region is not None: ds = ilamb_regions.maskedDataset(region,self)
         da = ds[self.varname]
         if not self.temporal() and self.spatial():
             if "cell_measure" in ds: da = xr.where(ds['cell_measure']<1,np.nan,da)
@@ -457,7 +460,7 @@ class Variable():
     
     def _integrate_space(self,region=None,mean=False):
         assert "cell_measure" in self.ds
-        ds = self.ds if region is None else ilamb_regions.getMask(region,self)
+        ds = self.ds if region is None else ilamb_regions.maskedDataset(region,self)
         da = ds[self.varname]
         cm = ds['cell_measure']
         v,dx = xr.align(da,xr.where(cm<1,np.nan,cm),join='override',copy=False)
@@ -485,7 +488,7 @@ class Variable():
         """Integrate over sites, probably doesn't make sense but gives us a uniform API for taking means across space/sites.
 
         """
-        ds = self.ds if region is None else ilamb_regions.getMask(region,self)
+        ds = self.ds if region is None else ilamb_regions.maskedDataset(region,self)
         da = ds[self.varname]
         sdim = find_site_dimension(da)
         if mean:
@@ -581,8 +584,8 @@ class Variable():
         dims = []
         if dim ==  'time': dims = ['time']
         if dim == 'space': dims = [self.lat_name,self.lon_name]
-        sds = self.ds if region is None else ilamb_regions.getMask(region,self)    
-        vds =    v.ds if region is None else ilamb_regions.getMask(region,   v)    
+        sds = self.ds if region is None else ilamb_regions.maskedDataset(region,self)    
+        vds =    v.ds if region is None else ilamb_regions.maskedDataset(region,   v)    
         r = xr.corr(sds[self.varname],vds[v.varname],dim=dims)
         dims = ["'%s'" % d for d in dims]
         attrs = {}

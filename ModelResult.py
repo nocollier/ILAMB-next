@@ -1,4 +1,4 @@
-from Variable import Variable
+from Variable import Variable,align_latlon
 from sympy import sympify
 import xarray as xr
 import numpy as np
@@ -193,6 +193,7 @@ class ModelResult():
             lnd = lnd.ds[lnd.varname]
         except Exception as e:
             pass
+        if atm is not None and lnd is not None: atm,lnd = xr.align(atm,lnd,join='override',copy=False)
         if atm is not None: self.area_atm = atm
         if ocn is not None: self.area_ocn = ocn
         if lnd is not None: self.frac_lnd = lnd

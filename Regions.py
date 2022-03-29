@@ -150,6 +150,37 @@ class Regions(object):
             lat = var.ds[var.lat_name]
             lon = var.ds[var.lon_name]
             if lon.max() > 180: rlon = (np.asarray(rlon)+360)%360
+            out = xr.where((lat>=rlat[0])*(lat<=rlat[1])*(lon>=rlon[0])*(lon<=rlon[1]),False,True)
+            return out
+        elif rtype == 1:
+            rtype,rname,da = rdata
+            out = da.interp(lat=var.ds[var.lat_name],lon=var.ds[var.lon_name],method='nearest')==False
+            return out
+        msg = "Region type #%d not recognized" % rtype
+        raise ValueError(msg)
+
+    def maskedDataset(self,label,var):
+        """Given the region label and a ILAMB.Variable, return a dataset nan'd outside of the region.
+
+        Parameters
+        ----------
+        label : str
+            the unique region identifier
+        var : ILAMB.Variable.Variable
+            the variable to which we would like to apply a mask
+
+        Returns
+        -------
+        mask : numpy.ndarray
+            a boolean array appropriate for masking the input variable data
+        """
+        rdata = Regions._regions[label]
+        rtype = rdata[0]
+        if rtype == 0:
+            rtype,rname,rlat,rlon = rdata
+            lat = var.ds[var.lat_name]
+            lon = var.ds[var.lon_name]
+            if lon.max() > 180: rlon = (np.asarray(rlon)+360)%360
             keep = [u for u in var.ds if var.lat_name in var.ds[u].dims and var.lon_name in var.ds[u].dims]
             ds = var.ds.drop_vars([u for u in var.ds if u not in keep])
             ds = xr.where((lat>=rlat[0])*(lat<=rlat[1])*(lon>=rlon[0])*(lon<=rlon[1]),ds,np.nan)
@@ -157,10 +188,12 @@ class Regions(object):
         elif rtype == 1:
             rtype,rname,da = rdata
             out = da.interp(lat=var.ds[var.lat_name],lon=var.ds[var.lon_name],method='nearest')
-            return out==False
+            keep = [u for u in var.ds if var.lat_name in var.ds[u].dims and var.lon_name in var.ds[u].dims]
+            ds = var.ds.drop_vars([u for u in var.ds if u not in keep])
+            ds = xr.where(out,ds,np.nan)
+            return ds
         msg = "Region type #%d not recognized" % rtype
-        raise ValueError(msg)
-
+        raise ValueError(msg)    
 
     def hasData(self,label,var):
         """Checks if the ILAMB.Variable has data on the given region.
