@@ -519,7 +519,10 @@ class Confrontation(object):
         name = "Reference" if m is None else m.name
         if self.df_plot is None:
             self.df_plot = generate_plot_database(glob.glob(os.path.join(self.path,"*.nc")),cmap=self.cmap)
-        df = self.df_plot[(self.df_plot.Model==name) & (self.df_plot.IsSpace==True)]
+
+        # Map plots
+        df = self.df_plot[(self.df_plot.Model==name) & ( (self.df_plot.IsSpace==True) |
+                                                         (self.df_plot.IsSite ==True) )]
         for i,r in df.iterrows():
             v = Variable(filename=r['Filename'],varname=r['Variable'])
             for region in self.regions:
@@ -586,6 +589,7 @@ if __name__ == "__main__":
         ModelResult(os.path.join(ROOT,"MODELS/CMIP6/NorESM2-LM"   ),name="NormESM2-LM"  ),
         ModelResult(os.path.join(ROOT,"MODELS/CMIP6/UKESM1-0-LL"  ),name="UKESM1-0-LL"  ),
     ]
+    #M = [ModelResult(os.path.join(ROOT,"MODELS/CMIP6/CESM2"        ),name="CESM2"        )]
     print("Initialize models...")
     for m in M:
         m.findFiles()
@@ -597,17 +601,18 @@ if __name__ == "__main__":
     C = [Confrontation(source = os.path.join(ROOT,"DATA/gpp/FLUXNET2015/gpp.nc"),
                        variable = "gpp",
                        unit = "g m-2 d-1",
-                       #regions = [None,"nhsa"],
+                       regions = [None,"euro"],
+                       cmap = "Greens",
                        path = "./_build/gpp/FLUXNET2015",
                        df_errs = df),
          Confrontation(source = os.path.join(ROOT,"DATA/gpp/FLUXCOM/gpp.nc"),
                        variable = "gpp",
                        unit = "g m-2 d-1",
-                       #regions = [None,"nhsa"],
+                       regions = [None,"euro"],
                        cmap = "Greens",
                        path = "./_build/gpp/FLUXCOM",
                        df_errs = df)]
-    for c in C[1:2]:
+    for c in C:
         print(c.source,c.variable)
         for m in M:
             t0 = time.time()

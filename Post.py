@@ -19,6 +19,15 @@ def is_space(da):
     if (da.dims[0].startswith("lat") and da.dims[1].startswith("lon")): return True
     return False
 
+def is_site(da):
+    """Do we have a 1D array of sites to plot?
+
+    """
+    if da.ndim != 1: return False
+    if da.dims[0].startswith("time"): return False
+    if ("lat" in list(da.coords) and "lon" in list(da.coords)): return True
+    return True
+
 def get_region(da):
     """Regions can be encoded in the name or attributes.
 
@@ -62,7 +71,7 @@ def generate_plot_database(ncfiles,cmap=None):
 
     """
     if type(ncfiles) is not list: ncfiles = [ncfiles]
-    filename = []; varname = []; source = []; istime = []; isspace = []
+    filename = []; varname = []; source = []; istime = []; isspace = []; issite = []
     region = []; analysis = []; colormap = []; longname = []
     for f in ncfiles:
         ds = xr.open_dataset(f)
@@ -73,6 +82,7 @@ def generate_plot_database(ncfiles,cmap=None):
             source  .append(ds.name)
             istime  .append(is_time(da))
             isspace .append(is_space(da))
+            issite  .append(is_site(da))
             region  .append(get_region(da))
             analysis.append(get_analysis(da))
             longname.append(get_longname(da))
@@ -80,9 +90,9 @@ def generate_plot_database(ncfiles,cmap=None):
             clr = 'rgb(%d,%d,%d)' % (clr[0],clr[1],clr[2])
             colormap.append(clr if (istime[-1] and not isspace[-1]) else get_colormap(da,cmap))
     df = {"Filename":filename,"Variable":varname,"Model":source,"IsTime":istime,"IsSpace":isspace,
-          "Region":region,"Analysis":analysis,"Colormap":colormap,"Longname":longname}
-    df = pd.DataFrame(df,columns=["Filename","Variable","Model","IsTime","IsSpace","Region","Analysis","Colormap",
-                                  "Longname"])
+          "IsSite":issite,"Region":region,"Analysis":analysis,"Colormap":colormap,"Longname":longname}
+    df = pd.DataFrame(df,columns=["Filename","Variable","Model","IsTime","IsSpace","IsSite","Region",
+                                  "Analysis","Colormap","Longname"])
     df = find_plot_limits(df)
     df['Plot Name'] = [p[0] for p in df.Variable.str.split("_")]
     return df
@@ -182,8 +192,8 @@ def convert_scalars_to_str(dfs):
     
 if __name__ == "__main__":
     import glob
-    dfp = generate_plot_database(glob.glob("_build/gpp/FLUXCOM/*.nc"),cmap="Greens")
+    dfp = generate_plot_database(glob.glob("_build/gpp/FLUXNET2015/*.nc"),cmap="Greens")
     #print(generate_jsplotly_curves(dfp))
-    dfs = generate_scalar_database(glob.glob("_build/gpp/FLUXCOM/*.csv"))
-    print(convert_scalars_to_str(dfs))
+    #dfs = generate_scalar_database(glob.glob("_build/gpp/FLUXCOM/*.csv"))
+    #print(convert_scalars_to_str(dfs))
         

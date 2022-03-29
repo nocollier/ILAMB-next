@@ -181,7 +181,7 @@ class Regions(object):
             lat = var.ds[var.lat_name]
             lon = var.ds[var.lon_name]
             if lon.max() > 180: rlon = (np.asarray(rlon)+360)%360
-            keep = [u for u in var.ds if var.lat_name in var.ds[u].dims and var.lon_name in var.ds[u].dims]
+            keep = [u for u in var.ds if var.lat_name in var.ds[u].coords and var.lon_name in var.ds[u].coords]
             ds = var.ds.drop_vars([u for u in var.ds if u not in keep])
             ds = xr.where((lat>=rlat[0])*(lat<=rlat[1])*(lon>=rlon[0])*(lon<=rlon[1]),ds,np.nan)
             return ds

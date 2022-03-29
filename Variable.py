@@ -83,7 +83,8 @@ def move_coordinates(ds,varname):
     """
     da = ds[varname]
     candidate_dims = [d for d in da.dims if d not in ds]
-    coords = { key: ds[key] for key in ds if (ds[key].ndim==1 and
+    coords = { key: ds[key] for key in ds if (key != varname and
+                                              ds[key].ndim==1 and
                                               ds[key].dims[0] in candidate_dims) }
     ds = ds.drop(coords.keys())
     ds[varname] = ds[varname].assign_coords(coords)
@@ -339,7 +340,6 @@ class Variable():
         region = kwargs.get("region",None)
         if "region" in kwargs: kwargs.pop("region")
         if "cmap"   in kwargs: kwargs['cmap'] = plt.get_cmap(kwargs['cmap'],9)
-        
         ds = self.ds
         if region is not None: ds = ilamb_regions.maskedDataset(region,self)
         da = ds[self.varname]
@@ -362,12 +362,18 @@ class Variable():
             if self.lat_name is None or self.lon_name is None: return
             ext = extents_sites(da,self.ds[self.lat_name],self.ds[self.lon_name])
             proj,aspect = pick_projection(ext)
+            figsize = kwargs.pop('figsize') if 'figsize' in kwargs else (6*1.03,6/aspect)
             fig,ax = plt.subplots(dpi=200,
                                   tight_layout=kwargs.pop('tight_layout') if 'tight_layout' in kwargs else None,
-                                  figsize=kwargs.pop('figsize') if 'figsize' in kwargs else None,
+                                  figsize=figsize,
                                   subplot_kw={'projection':proj})
-            p = ax.scatter(self.ds[self.lon_name],self.ds[self.lat_name],c=self.ds[self.varname],
-                           transform=ccrs.PlateCarree(),**kwargs)
+            p = xr.plot.scatter(ds,self.lon_name,self.lat_name,
+                                hue       = self.varname,
+                                ax        = ax,
+                                cbar_kwargs = {'label':self.units()},
+                                transform = ccrs.PlateCarree(),
+                                **kwargs)
+            ax.set_title("")
             ax = _finalize_plot(ax,ext)
         else:
             da.plot(**kwargs)
