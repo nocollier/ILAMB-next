@@ -68,7 +68,7 @@ def trim_time(a,b):
     if 'time' not in b.ds[b.varname].dims: return a,b
     at0,atf = a.timeBounds()
     bt0,btf = b.timeBounds()
-    tol = int(1*24*3600*1e9) # 1 day in nanoseconds 
+    tol = int(1*24*3600*1e9) # 1 day in nanoseconds
     t0 = max(at0,bt0)-tol
     tf = min(atf,btf)+tol
     a.ds = a.ds.sel(time=slice(t0,tf))
@@ -256,7 +256,7 @@ def ScoreRMSE(r0,c0,r=None,c=None,regions=[None],df_errs=None):
     if r0.ds['time'].size < 12: return {},{},[]
 
     if df_errs is None: # as in (Collier, et al., JAMES, 2018)
-        
+
         # get normalizer and regrid
         norm0 = r0.std(dim='time')
         r,c,norm = r0.nestSpatialGrids(c0,norm0)

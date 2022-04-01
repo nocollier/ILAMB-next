@@ -667,7 +667,7 @@ class Variable():
             dt *= 1e-9/86400 # [ns] to [d]
             self.ds['time_measure'] = dt.astype('float')
         else:
-            dt = da['time'].diff(dim='time').mean()
+            dt = float(da['time'].diff(dim='time').mean())*1e-9/3600/24
             self.ds['time_measure'] = da.time.copy(data=[dt]*da.time.size)
         if 'ilamb' not in da.attrs: self.ds[self.varname].attrs['ilamb'] = ''
         self.ds[self.varname].attrs['ilamb'] += "_createTimeMeasure(); "

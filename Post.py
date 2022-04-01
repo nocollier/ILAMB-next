@@ -1,7 +1,9 @@
+import os
 import xarray as xr
 import pandas as pd
 import numpy as np
 from Variable import Variable
+from Regions import Regions
 
 def is_time(da):
     """Do we have a 1D temporal curve to plot?
@@ -150,15 +152,19 @@ var %s_%s_%s = {
   mode: 'lines',
   name: '%s',
   line: { color: '%s' }
-};""" % (pname,mname,rname,x,y,mname,cname)
+};""" % (pname,mname.replace("-","").replace(".",""),rname,x,y,mname,cname)
         return trace
 
     traces = ""
+    plotnames = []
+    plottypes = []
     for (plotname,region),dfg in df[df.IsTime & ~df.IsSpace].groupby(["Plot Name","Region"]):
         for i,r in dfg.iterrows():
             traces += _genTrace(r['Filename'],r['Variable'],r['Model'],r['Region'],
                                 r['Plot Name'],r['Colormap'])
-    return traces
+            plotnames.append("%s_%s_%s" % (r['Plot Name'],r['Model'].replace("-","").replace(".",""),r['Region']))
+            if r['Plot Name'] not in plottypes: plottypes.append(r['Plot Name'])
+    return traces,plotnames,plottypes
     
 def generate_scalar_database(csvfiles):
     """Build a single pandas dataframe with all scalar information.
@@ -188,12 +194,284 @@ def convert_scalars_to_str(dfs):
         out.append(d)
     out = str(out).replace(" nan"," NaN")
     return out
+
+def generate_region_pulldown(df):
+    """
+    """
+    ilamb_regions = Regions()
+    regions = list(df['Region'].dropna().unique())
+    rnames = ["All Data" if r == 'None' else ilamb_regions.getRegionName(r) for r in regions]
+    tmp = sorted(zip(regions,rnames),key=lambda x: '' if x[0]=='None' else x[1])
+    regions = [r for r,_ in tmp]
+    rnames  = [r for _,r in tmp]
+    txt = [' '*14 + '<option value="%s">%s</option>' % (r,n) for r,n in zip(regions,rnames)]
+    txt[0] = txt[0].replace("option ","option selected ")
+    entries = "\n".join(txt)
+    html = """
+ 	    <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
+              <span>Region</span>
+            </h6>
+	    <select class="form-select" aria-label="RegionSelect">
+%s
+	    </select>""" % entries
+    return html
+
+def generate_analysis_menus(df):
+    """
+    """
+    analyses = list(df['Analysis'].unique())
+    aids = [a.replace(" ","") for a in analyses]
+    html = """
+              <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
+		<span>Analysis Types</span>
+              </h6>
+	      <ul class="nav flex-column mb-2">
+		<li class="nav-item">
+		  <a class="nav-link" id="Overview" aria-current="page" href="#" onclick="clickOverview()">
+		    All
+		  </a>
+		</li>"""
+    for aid,a in zip(aids,analyses):
+        html += """
+		<li class="nav-item">
+		  <a class="nav-link" id="%s" href="#" onclick="click%s()">
+		    %s
+		  </a>
+		</li>""" % (aid,a.replace(" ",""),a)  
+    html += """
+              </ul>"""
+    return html
+
+def generate_data_information(ref_file):
+    ds = xr.open_dataset(ref_file)
+    html = """
+              <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
+		<span>Data Information</span>
+              </h6>
+	      <ul class="nav flex-column mb-2">"""
+    for head in ['title','institutions','version']:
+        if head in ds.attrs:
+            html += """
+		<li class="nav-item">
+		  <a class="nav-link">
+		    <div class="fw-bold">%s</div>
+		    %s
+		  </a>
+		</li>""" % (head.capitalize(),ds.attrs[head])
+    html += """
+	      </ul>"""
+    return html
+
+def generate_navigation_bar(df,ref_file):
+    html = """
+	<nav id="sidebarMenu" class="col-md-3 col-lg-2 d-md-block bg-light sidebar collapse">	  
+	  <div class="position-sticky pt-3">
+%s
+	    <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
+              <span>Mode</span>
+            </h6>
+            <ul class="nav flex-column">
+              <li class="nav-item">
+		<a class="nav-link active" id="single" aria-current="page" href="#" onclick="clickOverview()">
+		  Single Model (All Plots)
+		</a>
+              </li>    
+              <li class="nav-item">
+		<a class="nav-link" id="AllModels" aria-current="page" href="#" onclick="clickAllModels()">
+		  All Models (By Plot)
+		</a>
+              </li>
+%s      
+%s	      
+	  </div>
+	</nav>\n""" % (generate_region_pulldown(df),
+                     generate_analysis_menus(df),
+                     generate_data_information(ref_file))
+    return html
+
+def generate_main(df):
+    analyses = list(df['Analysis'].unique())
+    models = list(df['Model'].unique())
+    if "Reference" in models: models.pop(models.index("Reference"))
+    html = """
+	<main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">	  
+	  <div id="divTable">
+	    <br><h2>Scalar Table</h2>
+	    <div id="scalartable"></div>
+	  </div>"""
+    for a in analyses:
+        dfa = df[df['Analysis']==a]
+        plots = list(dfa['Plot Name'].unique())
+        html += """
+	  <div id="div%s">
+	    <br><h2>%s</h2>""" % (a.replace(" ",""),a)
+        for p in plots:
+            plot_added = False
+            for m in ['Reference',models[0]]:
+                dfpm = dfa[(dfa['Plot Name']==p) & (dfa['Model']==m)]
+                if len(dfpm)==0:
+                    continue
+                elif len(dfpm)==1:
+                    plot_added = True
+                    html += """
+                <img src="%s_None_%s.png" width="49%%">""" % (os.path.join(os.path.dirname(dfpm.iloc[0]['Filename']),m),p)
+            dfp = dfa[(dfa['Plot Name']==p)]
+            if not plot_added and len(dfp)>0:
+                if dfp.iloc[0]['IsTime']:
+                    html += """
+	        <div id="%s" style="width:100%%;height:500px;"></div>""" % p
+        html += """
+          </div>"""
+
+    dfp = df[df.IsTime==False]
+    plots = list(dfp['Plot Name'].unique())
+    html += """
+	  <div id="divAllModels">	  
+	    <br><h2>All Models</h2>
+	    <select class="form-select" aria-label="PlotSelect">"""
+    
+    txt = [' '*14 + '<option value="%s">%s</option>' % (p,p) for p in plots]
+    txt[0] = txt[0].replace("option ","option selected ")
+    entries = "\n".join(txt)
+    html += "\n%s" % entries
+    html += """
+            </select>"""
+
+    txt = [' '*12 + '<img src="%s_None_%s.png" width="32%%">' % (os.path.join(os.path.dirname(dfp.iloc[0]['Filename']),m),plots[0]) for m in models]
+    entries = "\n" + "\n".join(txt)
+    html += entries
+    html += """	  
+	</main>\n"""
+    return html
+
+def generate_analysis_toggles(dfs):
+    analyses = [a.replace(" ","") for a in list(dfs['Analysis'].dropna().unique())]
+    html = """
+      function setActive(eid) {
+        var atypes = %s;
+	atypes.forEach((x, i) => document.getElementById(x).classList.remove('active'));
+	document.getElementById("single").classList.remove('active');
+	document.getElementById("AllModels").classList.remove('active');
+	if (eid == "AllModels") {
+	  document.getElementById("AllModels").classList.add('active');
+	}else{
+	  document.getElementById("single").classList.add('active');
+	  document.getElementById(eid).classList.add('active');
+	}
+      };""" % (str(['Overview',]+analyses))
+    funcs = ['Overview',] + analyses + ['AllModels',]
+    for f in funcs:
+        html +=  """
+      function click%s() {
+        setActive("%s");
+	document.getElementById("divTable").style.display = "%s";""" % (f,f,"none" if f == "AllModels" else "block")
+        if f != "AllModels":
+            html += """
+        SetTable("None",%s);""" % ("null" if f == "Overview" else '"%s"' % f)
+        for a in analyses + ['AllModels']:
+            style = "block" if f == a else "none"
+            if f == "Overview" and a != "AllModels": style = "block"
+            html += """
+        document.getElementById("div%s").style.display = "%s";""" % (a,style)
+        html += """
+      };"""
+    html += """
+      clickOverview();"""
+
+    return html
+
+def generate_script(dfs):
+    html = """
+    <script>
+      var tableData = %s;
+      function SetTable(region,analysis) {
+	  
+	  /* creates a nested dictionary of models and scalar names */
+	  var cols = ['Model'];
+	  var o = tableData.reduce( (a,b) => {
+	      a[b.Model] = a[b.Model] || {};
+	      if (b.Region != region) return a;
+	      if (analysis) {
+		  if (b.Analysis != analysis) return a;
+	      };
+	      a[b.Model][b.ScalarName] = b.Data;
+	      if (cols.indexOf(b.ScalarName) < 0) cols.push(b.ScalarName);
+	      return a;
+	  }, {});
+	  
+	  /* build columns dictionary for the table */
+	  var cols = cols.map(function(k) {
+	      return {title:k,field:k};
+	  });
+	  
+	  /* unnest the dictionary to put it how the tabulator wants it */
+	  var data = Object.keys(o).map(function(k) {
+	      return Object.assign({'Model':k},o[k]);
+	  });
+	  
+	  var table = new Tabulator("#scalartable", {
+	      data:data,
+	      layout:"fitData",
+	      columns:cols
+	  });
+      };\n""" % (convert_scalars_to_str(dfs))
+    html += generate_analysis_toggles(dfs)
+    code,names,types = generate_jsplotly_curves(dfp)
+    html += code
+
+    html += """
+      var layout = {
+    	  font: { size: 24 }
+      };"""
+    for t in types:
+        n = [a for a in names if a.startswith(t) and a.endswith("None")]
+        html += """
+      Plotly.newPlot('%s',[%s],layout);""" % (t,",".join(n))
         
+    html += """
+    </script>"""
+    return html
+
+def generate_dataset_html(dfp,dfs,ref_file):
+
+    html = """
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>gpp | FLUXCOM</title>
+    <link href="https://unpkg.com/tabulator-tables@4.0.5/dist/css/tabulator.min.css" rel="stylesheet">
+    <script type="text/javascript" src="https://unpkg.com/tabulator-tables@4.0.5/dist/js/tabulator.min.js"></script>        
+    <link href="bootstrap.min.css" rel="stylesheet">
+    <link href="dashboard.css" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-2.4.2.min.js"></script>
+  </head>
+  <body>
+    <header class="navbar navbar-dark sticky-top bg-dark flex-md-nowrap p-0 shadow">
+      <a class="navbar-brand col-md-3 col-lg-2 me-0 px-3" href="#">gpp | FLUXCOM | 1980-2013</a>
+      <button class="navbar-toggler position-absolute d-md-none collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#sidebarMenu" aria-controls="sidebarMenu" aria-expanded="false" aria-label="Toggle navigation">
+	<span class="navbar-toggler-icon"></span>
+      </button>
+    </header>
+    <div class="container-fluid">
+      <div class="row">\n"""
+    html += generate_navigation_bar(dfp,ref_file)
+    html += generate_main(dfp)
+    html += """
+      </div>
+    </div>"""
+    html += generate_script(dfs)
+    html += """
+  </body>
+</html>"""
+    return html
+
     
 if __name__ == "__main__":
     import glob
-    dfp = generate_plot_database(glob.glob("_build/gpp/FLUXNET2015/*.nc"),cmap="Greens")
-    #print(generate_jsplotly_curves(dfp))
-    #dfs = generate_scalar_database(glob.glob("_build/gpp/FLUXCOM/*.csv"))
-    #print(convert_scalars_to_str(dfs))
-        
+    src = "FLUXNET2015"
+    dfp = generate_plot_database(glob.glob(f"_test/gpp/{src}/*.nc"),cmap="Greens")
+    dfs = generate_scalar_database(glob.glob(f"_test/gpp/{src}/*.csv"))
+
+    print(generate_dataset_html(dfp,dfs,f"~/data/ILAMB/DATA/gpp/{src}/gpp.nc"))
