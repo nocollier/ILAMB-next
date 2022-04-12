@@ -195,6 +195,23 @@ def convert_scalars_to_str(dfs):
     out = str(out).replace(" nan"," NaN")
     return out
 
+def generate_model_pulldown(df):
+    """
+    """
+    models = sorted(list(df['Model'].dropna().unique()),key=lambda a: a.lower())
+    models = [m for m in models if m != "Reference"]
+    txt = [' '*14 + '<option value="%s">%s</option>' % (m,m) for m in models]
+    txt[0] = txt[0].replace("option ","option selected ")
+    entries = "\n".join(txt)
+    html = """
+ 	    <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
+              <span>Model</span>
+            </h6>
+	    <select id="SelectModel" class="form-select" aria-label="ModelSelect" onclick="UpdateImages()">
+%s
+	    </select>""" % entries
+    return html
+
 def generate_region_pulldown(df):
     """
     """
@@ -211,7 +228,7 @@ def generate_region_pulldown(df):
  	    <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
               <span>Region</span>
             </h6>
-	    <select class="form-select" aria-label="RegionSelect">
+	    <select id="SelectRegion" class="form-select" aria-label="RegionSelect" onclick="UpdateImages()">
 %s
 	    </select>""" % entries
     return html
@@ -267,6 +284,7 @@ def generate_navigation_bar(df,ref_file):
 	<nav id="sidebarMenu" class="col-md-3 col-lg-2 d-md-block bg-light sidebar collapse">	  
 	  <div class="position-sticky pt-3">
 %s
+%s
 	    <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
               <span>Mode</span>
             </h6>
@@ -284,15 +302,17 @@ def generate_navigation_bar(df,ref_file):
 %s      
 %s	      
 	  </div>
-	</nav>\n""" % (generate_region_pulldown(df),
-                     generate_analysis_menus(df),
-                     generate_data_information(ref_file))
+	</nav>\n""" % (generate_model_pulldown(df),
+                       generate_region_pulldown(df),
+                       generate_analysis_menus(df),
+                       generate_data_information(ref_file))
     return html
 
 def generate_main(df):
     analyses = list(df['Analysis'].unique())
     models = list(df['Model'].unique())
     if "Reference" in models: models.pop(models.index("Reference"))
+    models = sorted(models,key=lambda x:x.lower())
     html = """
 	<main class="col-md-9 ms-sm-auto col-lg-10 px-md-4">	  
 	  <div id="divTable">
@@ -313,8 +333,9 @@ def generate_main(df):
                     continue
                 elif len(dfpm)==1:
                     plot_added = True
+                    iid = "%s_%s" % (p,"Model" if m == models[0] else "Reference")
                     html += """
-                <img src="%s_None_%s.png" width="49%%">""" % (os.path.join(os.path.dirname(dfpm.iloc[0]['Filename']),m),p)
+                <img id="%s" src="%s_None_%s.png" width="49%%">""" % (iid,os.path.join(os.path.dirname(dfpm.iloc[0]['Filename']),m),p)
             dfp = dfa[(dfa['Plot Name']==p)]
             if not plot_added and len(dfp)>0:
                 if dfp.iloc[0]['IsTime']:
@@ -328,16 +349,16 @@ def generate_main(df):
     html += """
 	  <div id="divAllModels">	  
 	    <br><h2>All Models</h2>
-	    <select class="form-select" aria-label="PlotSelect">"""
+	    <select class="form-select" id="SelectPlot" aria-label="PlotSelect" onclick="UpdateImages()">"""
     
-    txt = [' '*14 + '<option value="%s">%s</option>' % (p,p) for p in plots]
+    txt = [' '*14 + '<option value="%s">%s</option>' % (p,dfp[dfp['Plot Name']==p].iloc[0]['Longname']) for p in plots]
     txt[0] = txt[0].replace("option ","option selected ")
     entries = "\n".join(txt)
     html += "\n%s" % entries
     html += """
             </select>"""
 
-    txt = [' '*12 + '<img src="%s_None_%s.png" width="32%%">' % (os.path.join(os.path.dirname(dfp.iloc[0]['Filename']),m),plots[0]) for m in models]
+    txt = [' '*12 + '<img id="%s" src="%s_None_%s.png" width="32%%">' % (m,os.path.join(os.path.dirname(dfp.iloc[0]['Filename']),m),plots[0]) for m in models]
     entries = "\n" + "\n".join(txt)
     html += entries
     html += """	  
@@ -380,9 +401,39 @@ def generate_analysis_toggles(dfs):
 
     return html
 
+def generate_image_update(dfp):
+    models = list(dfp['Model'].unique())
+    if "Reference" in models: models.pop(models.index("Reference"))
+    ref_plots = dfp[(dfp.Model=="Reference") & (dfp.IsTime==False)]['Plot Name'].unique()
+    mod_plots = dfp[                           (dfp.IsTime==False)]['Plot Name'].unique()
+    path = os.path.join(os.path.dirname(dfp['Filename'].iloc[0]))
+    html = """
+      function UpdateImages() {
+        var rsel  = document.getElementById("SelectRegion");
+        var RNAME = rsel.options[rsel.selectedIndex].value;
+        var msel  = document.getElementById("SelectModel");
+        var MNAME = msel.options[msel.selectedIndex].value;
+        var psel  = document.getElementById("SelectPlot");
+        var PNAME = psel.options[psel.selectedIndex].value;
+        var path = '%s';""" % path
+    html += """
+        var ref_plots = [%s];
+        ref_plots.forEach((x, i) => document.getElementById(x + '_Reference').src = path + '/Reference_' + RNAME + '_' + x + '.png');""" % (", ".join(['"%s"' % p for p in ref_plots]))
+    html += """
+        var mod_plots = [%s];
+        mod_plots.forEach((x, i) => document.getElementById(x + '_Model').src =  path + '/' + MNAME + '_' + RNAME + '_' + x + '.png');""" % (", ".join(['"%s"' % p for p in mod_plots]))
+    html += """
+        var models = [%s];
+        models.forEach((x, i) => document.getElementById(x).src =  path + '/' + x + '_' + RNAME + '_' + PNAME + '.png');""" % (", ".join(['"%s"' % m for m in models]))
+    html += """
+      };"""
+    return html
+
 def generate_script(dfs):
     html = """
     <script>
+      %s
+
       var tableData = %s;
       function SetTable(region,analysis) {
 	  
@@ -414,7 +465,7 @@ def generate_script(dfs):
 	      layout:"fitData",
 	      columns:cols
 	  });
-      };\n""" % (convert_scalars_to_str(dfs))
+      };\n""" % (generate_image_update(dfp),convert_scalars_to_str(dfs))
     html += generate_analysis_toggles(dfs)
     code,names,types = generate_jsplotly_curves(dfp)
     html += code
@@ -470,8 +521,9 @@ def generate_dataset_html(dfp,dfs,ref_file):
     
 if __name__ == "__main__":
     import glob
-    src = "FLUXNET2015"
+    src = "FLUXCOM"
     dfp = generate_plot_database(glob.glob(f"_test/gpp/{src}/*.nc"),cmap="Greens")
     dfs = generate_scalar_database(glob.glob(f"_test/gpp/{src}/*.csv"))
-
     print(generate_dataset_html(dfp,dfs,f"~/data/ILAMB/DATA/gpp/{src}/gpp.nc"))
+
+    #print(generate_image_update(dfp))
