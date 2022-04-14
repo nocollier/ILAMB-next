@@ -388,7 +388,9 @@ def generate_analysis_toggles(dfs):
 	document.getElementById("divTable").style.display = "%s";""" % (f,f,"none" if f == "AllModels" else "block")
         if f != "AllModels":
             html += """
-        SetTable("None",%s);""" % ("null" if f == "Overview" else '"%s"' % f)
+        var rsel  = document.getElementById("SelectRegion");
+        var RNAME = rsel.options[rsel.selectedIndex].value;
+        SetTable(RNAME,%s);""" % ("null" if f == "Overview" else '"%s"' % f)
         for a in analyses + ['AllModels']:
             style = "block" if f == a else "none"
             if f == "Overview" and a != "AllModels": style = "block"
