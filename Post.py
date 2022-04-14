@@ -335,7 +335,7 @@ def generate_main(df):
                     plot_added = True
                     iid = "%s_%s" % (p,"Model" if m == models[0] else "Reference")
                     html += """
-                <img id="%s" src="%s_None_%s.png" width="49%%">""" % (iid,os.path.join(os.path.dirname(dfpm.iloc[0]['Filename']),m),p)
+                <img id="%s" src="%s_None_%s.png" width="49%%">""" % (iid,m,p)
             dfp = dfa[(dfa['Plot Name']==p)]
             if not plot_added and len(dfp)>0:
                 if dfp.iloc[0]['IsTime']:
@@ -358,7 +358,7 @@ def generate_main(df):
     html += """
             </select>"""
 
-    txt = [' '*12 + '<img id="%s" src="%s_None_%s.png" width="32%%">' % (m,os.path.join(os.path.dirname(dfp.iloc[0]['Filename']),m),plots[0]) for m in models]
+    txt = [' '*12 + '<img id="%s" src="%s_None_%s.png" width="32%%">' % (m,m,plots[0]) for m in models]
     entries = "\n" + "\n".join(txt)
     html += entries
     html += """	  
@@ -418,18 +418,18 @@ def generate_image_update(dfp):
         var path = '%s';""" % path
     html += """
         var ref_plots = [%s];
-        ref_plots.forEach((x, i) => document.getElementById(x + '_Reference').src = path + '/Reference_' + RNAME + '_' + x + '.png');""" % (", ".join(['"%s"' % p for p in ref_plots]))
+        ref_plots.forEach((x, i) => document.getElementById(x + '_Reference').src = 'Reference_' + RNAME + '_' + x + '.png');""" % (", ".join(['"%s"' % p for p in ref_plots]))
     html += """
         var mod_plots = [%s];
-        mod_plots.forEach((x, i) => document.getElementById(x + '_Model').src =  path + '/' + MNAME + '_' + RNAME + '_' + x + '.png');""" % (", ".join(['"%s"' % p for p in mod_plots]))
+        mod_plots.forEach((x, i) => document.getElementById(x + '_Model').src = MNAME + '_' + RNAME + '_' + x + '.png');""" % (", ".join(['"%s"' % p for p in mod_plots]))
     html += """
         var models = [%s];
-        models.forEach((x, i) => document.getElementById(x).src =  path + '/' + x + '_' + RNAME + '_' + PNAME + '.png');""" % (", ".join(['"%s"' % m for m in models]))
+        models.forEach((x, i) => document.getElementById(x).src =  x + '_' + RNAME + '_' + PNAME + '.png');""" % (", ".join(['"%s"' % m for m in models]))
     html += """
       };"""
     return html
 
-def generate_script(dfs):
+def generate_script(dfp,dfs):
     html = """
     <script>
       %s
@@ -512,7 +512,7 @@ def generate_dataset_html(dfp,dfs,ref_file):
     html += """
       </div>
     </div>"""
-    html += generate_script(dfs)
+    html += generate_script(dfp,dfs)
     html += """
   </body>
 </html>"""
@@ -526,4 +526,4 @@ if __name__ == "__main__":
     dfs = generate_scalar_database(glob.glob(f"_test/gpp/{src}/*.csv"))
     print(generate_dataset_html(dfp,dfs,f"~/data/ILAMB/DATA/gpp/{src}/gpp.nc"))
 
-    #print(generate_image_update(dfp))
+

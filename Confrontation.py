@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import xarray as xr
-from Post import generate_plot_database
+from Post import generate_plot_database, generate_scalar_database, generate_dataset_html
 from Regions import Regions
 
 ilamb_regions = Regions()
@@ -534,16 +534,30 @@ class Confrontation(object):
 
     def plotReference(self):
         """
-
+        
         """
-        self._plot()
-
+        if self.master: self._plot()
+        
     def plotModel(self,m):
         """
 
         """
         self._plot(m)
 
+    def generateHTML(self):
+        """
+
+        """
+        if not self.master: return
+        dfp = self.df_plot
+        if self.df_plot is None:
+            dfp = generate_plot_database(glob.glob(os.path.join(self.path,"*.nc")),cmap=self.cmap)
+        dfs = generate_scalar_database(glob.glob(os.path.join(self.path,"*.csv")))
+        html = generate_dataset_html(dfp,dfs,self.source)
+        with open(os.path.join(self.path,"index.html"),mode='w') as f:
+            f.write(html)
+
+    
 def assign_model_colors(M):
     """Later migrate this elsewhere.
 
@@ -589,7 +603,7 @@ if __name__ == "__main__":
         ModelResult(os.path.join(ROOT,"MODELS/CMIP6/NorESM2-LM"   ),name="NormESM2-LM"  ),
         ModelResult(os.path.join(ROOT,"MODELS/CMIP6/UKESM1-0-LL"  ),name="UKESM1-0-LL"  ),
     ]
-    #M = [ModelResult(os.path.join(ROOT,"MODELS/CMIP6/CESM2"        ),name="CESM2"        )]
+    M = [ModelResult(os.path.join(ROOT,"MODELS/CMIP6/CESM2"        ),name="CESM2"        )]
     print("Initialize models...")
     for m in M:
         m.findFiles()
@@ -630,3 +644,4 @@ if __name__ == "__main__":
             dt = time.time()-t0
             print("%.0f" % dt)
         c.plotReference()
+        c.generateHTML()
