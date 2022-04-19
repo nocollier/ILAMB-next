@@ -51,16 +51,16 @@ def CriticalSoilMoisture(m,**kwargs):
     plt.savefig("dRmap_%s_%s_%s_%s.png" % (m.name,nveg,nenergy,nwater))
     plt.close()
 
-    # Analysis includes looking at mopisture at transitions of
+    # Analysis includes looking at moisture at transitions of
     # correlations. So we read the water variable again and attempt to
     # convert to a volumetric %
-    water = m.getVariable(nwater,t0=t0,tf=tf).integrateInTime(mean=True)
+    water = m.getVariable(nwater,t0=t0,tf=tf).integrate(mean=True,dim='time')
     if nwater.lower() == "mrsos":
         density = 1000. # [kg m-3]
         thick   = 0.1   # [m]
         water.convert("kg m-2")
         water.ds[water.varname] /= density*thick
-        water.ds[water.varname].attrs['units'] = "1"        
+        water.ds[water.varname].attrs['unit'] = "1"        
     df = pd.DataFrame({"R"       :       R.ds[       R.varname].values.flatten(),
                        "R_water" : R_water.ds[ R_water.varname].values.flatten(),
                        "R_energy":R_energy.ds[R_energy.varname].values.flatten(),

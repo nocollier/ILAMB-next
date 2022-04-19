@@ -352,9 +352,11 @@ class Variable():
                                   tight_layout=kwargs.pop('tight_layout') if 'tight_layout' in kwargs else None,
                                   figsize=figsize,
                                   subplot_kw={'projection':proj})
+            cba = {'label':self.units()}
+            if "cbar_kwargs" in kwargs: cba.update(kwargs.pop("cbar_kwargs"))
             p = da.plot(ax          = ax,
                         transform   = ccrs.PlateCarree(),
-                        cbar_kwargs = {'label':self.units()},
+                        cbar_kwargs = cba,
                         **kwargs)
             ax.set_title("")
             ax = _finalize_plot(ax,ext)
@@ -602,6 +604,7 @@ class Variable():
                                                                         self.lon_name in r.dims)) else None
         r = Variable(da = r, varname = "corr_%s_%s" % (self.varname,v.varname),
                      cell_measure = cm, time_measure = tm)
+        r.setAttr("units","1")
         if r.ds[r.varname].size == 1: r = float(r.ds[r.varname])
         return r
 
