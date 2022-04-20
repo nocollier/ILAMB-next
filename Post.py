@@ -175,6 +175,7 @@ def generate_scalar_database(csvfiles):
     return df
 
 def convert_scalars_to_str(dfs):
+    print(dfs)
     """
     # determine preferred column order
     analyses = df.Analysis.unique()
@@ -186,7 +187,7 @@ def convert_scalars_to_str(dfs):
     """
     df = dfs.copy()
     df['Data'] = df['Data'].apply('{:,.3g}'.format)
-    df['ScalarName'] += " [" + df['Units'] + "]"
+    df['ScalarName'] += " [" + df['Units'].astype(str) + "]"
     out = []
     for i,r in df.iterrows():
         d = dict(id=i)
@@ -260,7 +261,10 @@ def generate_analysis_menus(df):
     return html
 
 def generate_data_information(ref_file):
-    ds = xr.open_dataset(ref_file)
+    try:
+        ds = xr.open_dataset(ref_file)
+    except:
+        return ""
     html = """
               <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
 		<span>Data Information</span>
@@ -486,7 +490,7 @@ def generate_script(dfp,dfs):
     return html
 
 def generate_dataset_html(dfp,dfs,ref_file):
-
+    
     html = """
 <!doctype html>
 <html lang="en">
