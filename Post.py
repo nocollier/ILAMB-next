@@ -175,7 +175,6 @@ def generate_scalar_database(csvfiles):
     return df
 
 def convert_scalars_to_str(dfs):
-    print(dfs)
     """
     # determine preferred column order
     analyses = df.Analysis.unique()
@@ -238,7 +237,7 @@ def generate_analysis_menus(df):
     """
     """
     analyses = list(df['Analysis'].unique())
-    aids = [a.replace(" ","") for a in analyses]
+    aids = [a for a in analyses]
     html = """
               <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
 		<span>Analysis Types</span>
@@ -328,7 +327,7 @@ def generate_main(df):
         plots = list(dfa['Plot Name'].unique())
         html += """
 	  <div id="div%s">
-	    <br><h2>%s</h2>""" % (a.replace(" ",""),a)
+	    <br><h2>%s</h2>""" % (a,a)
         for p in plots:
             plot_added = False
             for m in ['Reference',models[0]]:
@@ -370,7 +369,7 @@ def generate_main(df):
     return html
 
 def generate_analysis_toggles(dfs):
-    analyses = [a.replace(" ","") for a in list(dfs['Analysis'].dropna().unique())]
+    analyses = [a for a in list(dfs['Analysis'].dropna().unique())]
     html = """
       function setActive(eid) {
         var atypes = %s;
@@ -389,7 +388,7 @@ def generate_analysis_toggles(dfs):
         html +=  """
       function click%s() {
         setActive("%s");
-	document.getElementById("divTable").style.display = "%s";""" % (f,f,"none" if f == "AllModels" else "block")
+	document.getElementById("divTable").style.display = "%s";""" % (f.replace(" ",""),f,"none" if f == "AllModels" else "block")
         if f != "AllModels":
             html += """
         var rsel  = document.getElementById("SelectRegion");
