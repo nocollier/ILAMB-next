@@ -127,10 +127,11 @@ class ConfLoCoMetrics(Confrontation):
         
         # Critical Soil Moisture Map
         dfs = df[df['Plot Name']=='dRmap']
+        val = max(abs(dfs.iloc[0]['Plot Min']),abs(dfs.iloc[0]['Plot Max']))
         if len(dfs):
             dfs = dfs.iloc[0]
             v = Variable(filename=dfs['Filename'],varname=dfs['Variable'])
-            v.plot(figsize=(6,4.5),tight_layout=True,
+            v.plot(figsize=(6,4.5),tight_layout=True,vmin=-val,vmax=+val,
                    cmap="BrBG",cbar_kwargs={'label':'$\longleftarrow$ Water Limited      Energy Limited $\longrightarrow$',
                                             'pad':0.05,
                                             'orientation':'horizontal'})
@@ -234,13 +235,39 @@ def CriticalSoilMoisture(m,**kwargs):
     
 
 if __name__ == "__main__":
-
     from ModelResult import ModelResult
-    m = ModelResult("/home/nate/data/ILAMB/MODELS/CMIP6/CESM2",name="CESM2")
-    m.findFiles()
-    m.getGridInformation()
+    import os
 
+    ROOT = os.environ['ILAMB_ROOT']
+    M = [
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/BCC-CSM2-MR"  ),name="BCC-CSM2-MR"  ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/CanESM5"      ),name="CanESM5"      ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/CESM2"        ),name="CESM2"        ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/GFDL-ESM4"    ),name="GFDL-ESM4"    ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/IPSL-CM6A-LR" ),name="IPSL-CM6A-LR" ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/MIROC-ES2L"   ),name="MIROC-ES2L"   ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/MPI-ESM1.2-HR"),name="MPI-ESM1.2-HR"),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/NorESM2-LM"   ),name="NormESM2-LM"  ),
+        ModelResult(os.path.join(ROOT,"MODELS/CMIP6/UKESM1-0-LL"  ),name="UKESM1-0-LL"  ),
+    ]
+    print("Initialize models...")
+    for m in M:
+        m.findFiles()
+        m.getGridInformation()
+        print("  ",m.name)
+    
     c = ConfLoCoMetrics(path = "./_loco")
-    c.confront(m)
-    c.plotModel(m)
+    for m in M:
+        try:
+            c.confront(m)
+            print(m.name,"success")
+        except:
+            print(m.name,"failed")
+    for m in M:
+        try:
+            c.plotModel(m)
+            print(m.name,"success")
+        except:
+            print(m.name,"failed")
+        
     c.generateHTML()
