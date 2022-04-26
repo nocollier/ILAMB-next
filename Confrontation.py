@@ -553,7 +553,7 @@ class Confrontation(object):
         if self.df_plot is None:
             dfp = generate_plot_database(glob.glob(os.path.join(self.path,"*.nc")),cmap=self.cmap)
         dfs = generate_scalar_database(glob.glob(os.path.join(self.path,"*.csv")))
-        html = generate_dataset_html(dfp,dfs,self.source)
+        html = generate_dataset_html(dfp,dfs,self.source,self.variable)
         with open(os.path.join(self.path,"index.html"),mode='w') as f:
             f.write(html)
 
