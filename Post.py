@@ -488,7 +488,7 @@ def generate_script(dfp,dfs):
     </script>"""
     return html
 
-def generate_dataset_html(dfp,dfs,ref_file):
+def generate_dataset_html(dfp,dfs,ref_file,varname):
     
     html = """
 <!doctype html>
@@ -496,7 +496,7 @@ def generate_dataset_html(dfp,dfs,ref_file):
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>gpp | FLUXCOM</title>
+    <title>%s | FLUXCOM</title>
     <link href="https://unpkg.com/tabulator-tables@4.0.5/dist/css/tabulator.min.css" rel="stylesheet">
     <script type="text/javascript" src="https://unpkg.com/tabulator-tables@4.0.5/dist/js/tabulator.min.js"></script>        
     <link href="bootstrap.min.css" rel="stylesheet">
@@ -505,13 +505,13 @@ def generate_dataset_html(dfp,dfs,ref_file):
   </head>
   <body>
     <header class="navbar navbar-dark sticky-top bg-dark flex-md-nowrap p-0 shadow">
-      <a class="navbar-brand col-md-3 col-lg-2 me-0 px-3" href="#">gpp | FLUXCOM | 1980-2013</a>
+      <a class="navbar-brand col-md-3 col-lg-2 me-0 px-3" href="#">%s | FLUXCOM | 1980-2013</a>
       <button class="navbar-toggler position-absolute d-md-none collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#sidebarMenu" aria-controls="sidebarMenu" aria-expanded="false" aria-label="Toggle navigation">
 	<span class="navbar-toggler-icon"></span>
       </button>
     </header>
     <div class="container-fluid">
-      <div class="row">\n"""
+      <div class="row">\n""" % (varname,varname)
     html += generate_navigation_bar(dfp,ref_file)
     html += generate_main(dfp)
     html += """
