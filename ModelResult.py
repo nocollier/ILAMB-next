@@ -94,6 +94,9 @@ class ModelResult():
         # Areas
         self.area_atm = self.area_ocn = self.frac_lnd = None
 
+        # Results caching
+        self.results = {}
+        
     def __str__(self):
         s  = ""
         s += "ModelResult: %s\n" % self.name
@@ -345,3 +348,9 @@ class ModelResult():
                         lat   = y, lat_bnds   = yb,
                         lon   = x, lon_bnds   = xb,
                         depth = d, depth_bnds = db)
+    
+    def cacheResults(self,vname,fname):
+        """
+        """
+        if vname not in self.results: self.results[vname] = []
+        self.results[vname].append(fname)
