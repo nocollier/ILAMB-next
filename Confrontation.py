@@ -121,12 +121,10 @@ def sanitize_into_dataset(d):
         t_name += "_"
 
     # make sure we dealt with everything
-    assert(len(set(d.keys()).difference(set(ds.keys())))==0)
-    keep = ['_FillValue','units','ilamb','analysis','region','longname']
+    for key in set(d.keys()).difference(set(ds.keys())): ds[key] = d[key].ds[key]
+    keep = ['_FillValue','units','ilamb','analysis','region','longname','rendered']
     for name in ds:
         ds[name].attrs = { key:val for key,val in ds[name].attrs.items() if key in keep }
-        #ds[name].attrs['actual_range'] = [ds[name].min(),ds[name].max()]
-        #ds[name].attrs['percentiles'] = list(ds[name].quantile([0.01,0.99]).to_numpy())
     ds = xr.Dataset(ds)
     return ds
 
@@ -499,7 +497,7 @@ class Confrontation(object):
 
         # compute overall score and output
         dfm = pd.concat([df for df in dfm if len(df)>0],ignore_index=True)
-        dfm.Model[dfm.Model=='model'] = m.name
+        dfm.loc[dfm.Model=='model','Model'] = m.name
         dfm = overall_score(dfm)
         dfm.to_csv(os.path.join(self.path,"%s.csv" % m.name),index=False)
 
@@ -553,7 +551,7 @@ class Confrontation(object):
         if self.df_plot is None:
             dfp = generate_plot_database(glob.glob(os.path.join(self.path,"*.nc")),cmap=self.cmap)
         dfs = generate_scalar_database(glob.glob(os.path.join(self.path,"*.csv")))
-        html = generate_dataset_html(dfp,dfs,self.source)
+        html = generate_dataset_html(dfp,dfs,self.source,self.variable)
         with open(os.path.join(self.path,"index.html"),mode='w') as f:
             f.write(html)
 

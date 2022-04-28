@@ -1,4 +1,5 @@
 import os
+import time
 import xarray as xr
 import pandas as pd
 import numpy as np
@@ -26,6 +27,7 @@ def is_site(da):
 
     """
     if da.ndim != 1: return False
+    if "rendered" in da.attrs: return False
     if da.dims[0].startswith("time"): return False
     if ("lat" in list(da.coords) and "lon" in list(da.coords)): return True
     return True
@@ -55,6 +57,13 @@ def get_longname(da):
     if "longname" in da.attrs: name = da.attrs['longname']
     return name
 
+def is_rendered(da):
+    """Is this something already plotted?
+
+    """
+    if "rendered" in da.attrs: return True
+    return False
+
 def get_colormap(da,cmap=None):
     """Colormaps can be encoded or use defaults.
 
@@ -74,7 +83,7 @@ def generate_plot_database(ncfiles,cmap=None):
     """
     if type(ncfiles) is not list: ncfiles = [ncfiles]
     filename = []; varname = []; source = []; istime = []; isspace = []; issite = []
-    region = []; analysis = []; colormap = []; longname = []
+    region = []; analysis = []; colormap = []; longname = []; isrender = []
     for f in ncfiles:
         ds = xr.open_dataset(f)
         for v in ds:
@@ -88,15 +97,34 @@ def generate_plot_database(ncfiles,cmap=None):
             region  .append(get_region(da))
             analysis.append(get_analysis(da))
             longname.append(get_longname(da))
+            isrender.append(is_rendered(da))
             clr = (np.asarray(ds.color)*256).astype(int)
             clr = 'rgb(%d,%d,%d)' % (clr[0],clr[1],clr[2])
             colormap.append(clr if (istime[-1] and not isspace[-1]) else get_colormap(da,cmap))
     df = {"Filename":filename,"Variable":varname,"Model":source,"IsTime":istime,"IsSpace":isspace,
-          "IsSite":issite,"Region":region,"Analysis":analysis,"Colormap":colormap,"Longname":longname}
+          "IsSite":issite,"Region":region,"Analysis":analysis,"Colormap":colormap,"Longname":longname,"IsRendered":isrender}
     df = pd.DataFrame(df,columns=["Filename","Variable","Model","IsTime","IsSpace","IsSite","Region",
-                                  "Analysis","Colormap","Longname"])
+                                  "Analysis","Colormap","Longname","IsRendered"])
     df = find_plot_limits(df)
     df['Plot Name'] = [p[0] for p in df.Variable.str.split("_")]
+    return df
+
+def generate_image_database(pngfiles):
+    """
+    """
+    if type(pngfiles) is not list: pngfiles = [pngfiles]
+    filename = []; model = []; region = []; plot = []; access = []
+    for f in pngfiles:
+        filename.append(f)
+        t = time.ctime(os.path.getmtime(f))
+        f = os.path.basename(f).replace(".png","").split("_")
+        if len(f) != 3: continue
+        model.append(f[0])
+        region.append(f[1])
+        plot.append(f[2])
+        access.append(t)
+    df = {"Filename":filename,"Model":model,"Region":region,"PlotName":plot,"AccessTime":access}
+    df = pd.DataFrame(df,columns=["Filename","Model","Region","PlotName","AccessTime"])
     return df
 
 def find_plot_limits(df,percentile=[1,99]):
@@ -488,7 +516,7 @@ def generate_script(dfp,dfs):
     </script>"""
     return html
 
-def generate_dataset_html(dfp,dfs,ref_file):
+def generate_dataset_html(dfp,dfs,ref_file,varname):
     
     html = """
 <!doctype html>
@@ -496,7 +524,7 @@ def generate_dataset_html(dfp,dfs,ref_file):
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>gpp | FLUXCOM</title>
+    <title>%s | FLUXCOM</title>
     <link href="https://unpkg.com/tabulator-tables@4.0.5/dist/css/tabulator.min.css" rel="stylesheet">
     <script type="text/javascript" src="https://unpkg.com/tabulator-tables@4.0.5/dist/js/tabulator.min.js"></script>        
     <link href="bootstrap.min.css" rel="stylesheet">
@@ -505,13 +533,13 @@ def generate_dataset_html(dfp,dfs,ref_file):
   </head>
   <body>
     <header class="navbar navbar-dark sticky-top bg-dark flex-md-nowrap p-0 shadow">
-      <a class="navbar-brand col-md-3 col-lg-2 me-0 px-3" href="#">gpp | FLUXCOM | 1980-2013</a>
+      <a class="navbar-brand col-md-3 col-lg-2 me-0 px-3" href="#">%s | FLUXCOM | 1980-2013</a>
       <button class="navbar-toggler position-absolute d-md-none collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#sidebarMenu" aria-controls="sidebarMenu" aria-expanded="false" aria-label="Toggle navigation">
 	<span class="navbar-toggler-icon"></span>
       </button>
     </header>
     <div class="container-fluid">
-      <div class="row">\n"""
+      <div class="row">\n""" % (varname,varname)
     html += generate_navigation_bar(dfp,ref_file)
     html += generate_main(dfp)
     html += """
@@ -527,8 +555,9 @@ def generate_dataset_html(dfp,dfs,ref_file):
 if __name__ == "__main__":
     import glob
     src = "FLUXCOM"
-    dfp = generate_plot_database(glob.glob(f"_test/gpp/{src}/*.nc"),cmap="Greens")
-    dfs = generate_scalar_database(glob.glob(f"_test/gpp/{src}/*.csv"))
-    print(generate_dataset_html(dfp,dfs,f"~/data/ILAMB/DATA/gpp/{src}/gpp.nc"))
-
-
+    #dfp = generate_plot_database(glob.glob(f"_test/gpp/{src}/*.nc"),cmap="Greens")
+    #dfs = generate_scalar_database(glob.glob(f"_test/gpp/{src}/*.csv"))
+    #print(generate_dataset_html(dfp,dfs,f"~/data/ILAMB/DATA/gpp/{src}/gpp.nc"))
+    dfp = generate_plot_database(glob.glob(f"_loco/*.nc"),cmap="Greens")
+    #dfi = generate_image_database(glob.glob(f"_loco/*.png"))
+    print(dfp)
