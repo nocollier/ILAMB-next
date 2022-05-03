@@ -468,6 +468,13 @@ def generate_script(dfp,dfs):
       %s
 
       var tableData = %s;
+      function formatterValue(cell, formatterParams, onRendered) {
+         if( isNaN(Number.parseFloat(cell.getValue())) ) {
+           return cell.getValue();
+ 	 } else {
+           return Number.parseFloat(cell.getValue()).toFixed(2);
+ 	 } 
+       };
       function SetTable(region,analysis) {
 	  
 	  /* creates a nested dictionary of models and scalar names */
@@ -485,7 +492,7 @@ def generate_script(dfp,dfs):
 	  
 	  /* build columns dictionary for the table */
 	  var cols = cols.map(function(k) {
-	      return {title:k,field:k};
+	      return {title:k,field:k,headerVertical:true,formatter:formatterValue};
 	  });
 	  
 	  /* unnest the dictionary to put it how the tabulator wants it */
@@ -495,9 +502,34 @@ def generate_script(dfp,dfs):
 	  
 	  var table = new Tabulator("#scalartable", {
 	      data:data,
-	      layout:"fitData",
+	      layout:"fitDataTable",
 	      columns:cols
 	  });
+
+          table.on("rowClick", function(e, row){
+              var rowData = row.getData();
+	      var cells = row.getCells();
+              cells.forEach(function(cell, i){
+                 for (const c of cell.getColumn().getCells()){
+	            c.getElement().style.backgroundColor="";
+		    c.getElement().style.fontWeight="normal";
+		 }
+	      });
+              row.getElement().childNodes[0].style.fontWeight='bold';
+	      cells.forEach(function(cell, i){
+		 if ( !isNaN(Number.parseFloat(cell.getValue())) ) {
+                    for (const c of cell.getColumn().getCells()){
+                        if (c != cell && Number.parseFloat(c.getValue()) >  Number.parseFloat(cell.getValue())) {
+			    c.getElement().style.backgroundColor = "#d8daeb";
+			}
+                        if (c != cell && Number.parseFloat(c.getValue()) <=  Number.parseFloat(cell.getValue())) {
+			    c.getElement().style.backgroundColor = "#fee0b6";
+			}
+		    }
+
+		 }
+	      });
+          });
       };\n""" % (generate_image_update(dfp),convert_scalars_to_str(dfs))
     html += generate_analysis_toggles(dfs)
     code,names,types = generate_jsplotly_curves(dfp)
@@ -525,8 +557,8 @@ def generate_dataset_html(dfp,dfs,ref_file,varname):
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>%s | FLUXCOM</title>
-    <link href="https://unpkg.com/tabulator-tables@4.0.5/dist/css/tabulator.min.css" rel="stylesheet">
-    <script type="text/javascript" src="https://unpkg.com/tabulator-tables@4.0.5/dist/js/tabulator.min.js"></script>        
+    <link href="https://unpkg.com/tabulator-tables@5.2/dist/css/tabulator.min.css" rel="stylesheet">
+    <script type="text/javascript" src="https://unpkg.com/tabulator-tables@5.2/dist/js/tabulator.min.js"></script>       
     <link href="bootstrap.min.css" rel="stylesheet">
     <link href="dashboard.css" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.4.2.min.js"></script>
