@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import xarray as xr
-from Post import generate_plot_database, generate_scalar_database, generate_dataset_html
+from Post import *
 from Regions import Regions
 
 ilamb_regions = Regions()
@@ -397,14 +397,22 @@ def ScoreSpatialDistribution(r0,c0,r=None,c=None,regions=[None]):
     df = []
     for region in regions:
         std0 = r.std(dim='space',region=region)
-        std  = c.std(dim='space',region=region)/std0
+        std  = c.std(dim='space',region=region)
         corr = r.correlation(c,'space',region=region)
+        df.append(['Reference',str(region),aname,'Spatial Standard Deviation','scalar',r.units(),std0])
+        df.append([    'model',str(region),aname,'Spatial Standard Deviation','scalar',r.units(),std])
+        df.append([    'model',str(region),aname,'Spatial Correlation'       ,'scalar','1',corr])
+        std  /= std0
         score = 2*(1+corr)/((std+1/std)**2)
-        df.append(['model',str(region),aname,'Spatial Normalized Standard Deviation','scalar','1',std])
-        df.append(['model',str(region),aname,'Spatial Correlation'                  ,'scalar','1',corr])
-        df.append(['model',str(region),aname,'Spatial Distribution Score'           ,'score' ,'1',score])
+        df.append([    'model',str(region),aname,'Spatial Distribution Score','score' ,'1',score])
     df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])
-    return {},{},df
+    c = c.integrate(dim='space',mean=True)
+    c.setAttr("rendered",1)
+    c.setAttr("longname","Spatial Distribution")
+    c_plot = {
+        "sd" : c
+    }
+    return {},c_plot,df
 
 class Confrontation(object):
 
@@ -427,6 +435,7 @@ class Confrontation(object):
         self.cmap     = kwargs.get(    "cmap",None)
         self.df_errs  = kwargs.get( "df_errs",None)
         self.df_plot  = None
+        self.df_scalar = None
         assert self.source is not None
         if not os.path.isfile(self.source):
             msg = "Cannot find the source, tried looking here: '%s'" % self.source
@@ -542,15 +551,54 @@ class Confrontation(object):
         """
         self._plot(m)
 
+    def plotComposite(self,M):
+        """
+
+        """
+        if not self.master: return
+        if self.df_scalar is None:
+            self.df_scalar = generate_scalar_database(glob.glob(os.path.join(self.path,"*.csv")))
+        dfs = self.df_scalar
+
+        # Spatial distribution Taylor plot
+        clrs = { m.name: m.color for m in M }
+        if 'Spatial Distribution' in dfs['Analysis'].unique():
+            df = dfs[dfs['Analysis']=='Spatial Distribution']
+            for region in df['Region'].unique():
+                r = df[(df['Model']=='Reference') & (df['Region']==region)]
+                if len(r) != 1: continue
+                r = r.iloc[0]
+                fig,[ax0,ax1] = plt.subplots(ncols=2,figsize=(6,5),dpi=200,gridspec_kw={'width_ratios': [4, 1]},tight_layout=True)
+                td = TaylorDiagram(r['Data'],fig=fig,rect=121,label="Reference",srange=(0.5,1.5))
+                for model in df['Model'].unique():
+                    c = df[(df['Model']==model) & (df['Region']==region)]
+                    if len(c) != 3: continue
+                    td.add_sample(c[c['ScalarName']=='Spatial Standard Deviation']['Data'],
+                                  c[c['ScalarName']==       'Spatial Correlation']['Data'],
+                                  marker='o', ms=7, ls='', mfc=clrs[model], label=model)
+                td.add_grid()
+                contours = td.add_contours(colors='0.8')
+                plt.clabel(contours, inline=1, fontsize=10, fmt='%.1f',zorder=-10)
+                ax1.legend(td.samplePoints,
+                           [ p.get_label() for p in td.samplePoints ],
+                           numpoints=1, prop=dict(size='small'), loc='upper right')
+                ax0.axis('off'); ax1.axis('off')
+                fig.suptitle("Spatial Distribution")
+                path = os.path.join(self.path,"Reference_%s_sd.png" % (str(region)))
+                fig.savefig(path)
+                plt.close()
+
     def generateHTML(self):
         """
 
         """
         if not self.master: return
-        dfp = self.df_plot
         if self.df_plot is None:
-            dfp = generate_plot_database(glob.glob(os.path.join(self.path,"*.nc")),cmap=self.cmap)
-        dfs = generate_scalar_database(glob.glob(os.path.join(self.path,"*.csv")))
+            self.df_plot = generate_plot_database(glob.glob(os.path.join(self.path,"*.nc")),cmap=self.cmap)
+        if self.df_scalar is None:
+            self.df_scalar = generate_scalar_database(glob.glob(os.path.join(self.path,"*.csv")))
+        dfp = self.df_plot
+        dfs = self.df_scalar
         html = generate_dataset_html(dfp,dfs,self.source,self.variable)
         with open(os.path.join(self.path,"index.html"),mode='w') as f:
             f.write(html)
@@ -630,7 +678,7 @@ if __name__ == "__main__":
             t0 = time.time()
             print("  %20s" % (m.name),end=' ',flush=True)
             try:
-                c.confront(m,skip_bias=False,skip_rmse=False,skip_cycle=True,skip_sd=True)
+                c.confront(m,skip_bias=False,skip_rmse=False,skip_cycle=False,skip_sd=False)
                 dt = time.time()-t0
                 print("%.0f" % dt)
             except:
@@ -641,5 +689,7 @@ if __name__ == "__main__":
             c.plotModel(m)
             dt = time.time()-t0
             print("%.0f" % dt)
+        c.plotComposite(M)
         c.plotReference()
         c.generateHTML()
+
