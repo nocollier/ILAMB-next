@@ -137,7 +137,7 @@ def find_plot_limits(df,percentile=[1,99]):
     """
     vmin = {}; vmax = {}
     for v in df.Variable.unique():
-        if "score" in v:
+        if "score" in v or df[df.Variable==v].IsRendered.all():
             vmin[v] = 0
             vmax[v] = 1
         else:
@@ -375,7 +375,7 @@ def generate_main(df):
         html += """
           </div>"""
 
-    dfp = df[df.IsTime==False]
+    dfp = df[(df.Model!='Reference') & (df.IsTime==False)]
     plots = list(dfp['Plot Name'].unique())
     html += """
 	  <div id="divAllModels">	  
@@ -438,7 +438,7 @@ def generate_image_update(dfp):
     models = list(dfp['Model'].unique())
     if "Reference" in models: models.pop(models.index("Reference"))
     ref_plots = dfp[(dfp.Model=="Reference") & (dfp.IsTime==False)]['Plot Name'].unique()
-    mod_plots = dfp[                           (dfp.IsTime==False)]['Plot Name'].unique()
+    mod_plots = dfp[(dfp.Model!="Reference") & (dfp.IsTime==False)]['Plot Name'].unique()
     path = os.path.join(os.path.dirname(dfp['Filename'].iloc[0]))
     html = """
       function UpdateImages() {
@@ -560,8 +560,7 @@ def generate_dataset_html(dfp,dfs,ref_file,varname):
     <link href="https://unpkg.com/tabulator-tables@5.2/dist/css/tabulator.min.css" rel="stylesheet">
     <script type="text/javascript" src="https://unpkg.com/tabulator-tables@5.2/dist/js/tabulator.min.js"></script>       
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-1BmE4kWBq78iYhFldvKuhfTAU6auU8tT94WrHftjDbrCEXSU1oBoqyl2QvZ6jIW3" crossorigin="anonymous">
-    <link href="dashboard.css" rel="stylesheet">
-    <script>
+    <style>
 body {
   font-size: .875rem;
 }
@@ -640,7 +639,7 @@ body {
   border-color: transparent;
   box-shadow: 0 0 0 3px rgba(255, 255, 255, .25);
 }
-    </script>
+    </style>
     <script src="https://cdn.plot.ly/plotly-2.4.2.min.js"></script>
   </head>
   <body>

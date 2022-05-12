@@ -391,10 +391,11 @@ def ScoreSpatialDistribution(r0,c0,r=None,c=None,regions=[None]):
 
     """
     aname = "Spatial Distribution"
+    v = r0.varname.split("_")[0]
     if r0.temporal(): r0 = r0.integrate(dim='time',mean=True)
     if c0.temporal(): c0 = c0.integrate(dim='time',mean=True)
     r,c = pick_grid_aligned(r0,c0,r,c)
-    df = []
+    df = []; r_plot = {}
     for region in regions:
         std0 = r.std(dim='space',region=region)
         std  = c.std(dim='space',region=region)
@@ -405,14 +406,22 @@ def ScoreSpatialDistribution(r0,c0,r=None,c=None,regions=[None]):
         std  /= std0
         score = 2*(1+corr)/((std+1/std)**2)
         df.append([    'model',str(region),aname,'Spatial Distribution Score','score' ,'1',score])
+
+    # Note: Plots and html pages are generated automatically from the
+    # data in the netCDF files. In this case, we have made a custom
+    # plot here. But we still need to add an entry that we will flag
+    # as 'rendered'. This will get the figure added to the html page
+    # in the right section.
+    d = r0.integrate(dim='space',mean=True)
+    d.setAttr("rendered",1)
+    d.setAttr("longname","Spatial Distribution")
+    n = "sd_of_%s" % (v)
+    d.ds = d.ds.rename({d.varname:n})
+    d.varname = n
+    r_plot[n] = d
+    r_plot,_ = add_analysis_name(aname,r_plot,{})
     df = pd.DataFrame(df,columns=['Model','Region','Analysis','ScalarName','ScalarType','Units','Data'])
-    c = c.integrate(dim='space',mean=True)
-    c.setAttr("rendered",1)
-    c.setAttr("longname","Spatial Distribution")
-    c_plot = {
-        "sd" : c
-    }
-    return {},c_plot,df
+    return r_plot,{},df
 
 class Confrontation(object):
 
@@ -541,10 +550,10 @@ class Confrontation(object):
 
     def plotReference(self):
         """
-        
+
         """
         if self.master: self._plot()
-        
+
     def plotModel(self,m):
         """
 
@@ -603,7 +612,7 @@ class Confrontation(object):
         with open(os.path.join(self.path,"index.html"),mode='w') as f:
             f.write(html)
 
-    
+
 def assign_model_colors(M):
     """Later migrate this elsewhere.
 
@@ -692,4 +701,3 @@ if __name__ == "__main__":
         c.plotComposite(M)
         c.plotReference()
         c.generateHTML()
-
