@@ -577,17 +577,17 @@ class Confrontation(object):
                 r = df[(df['Model']=='Reference') & (df['Region']==region)]
                 if len(r) != 1: continue
                 r = r.iloc[0]
-                fig,[ax0,ax1] = plt.subplots(ncols=2,figsize=(6,5),dpi=200,gridspec_kw={'width_ratios': [4, 1]},tight_layout=True)
+                fig,[ax0,ax1] = plt.subplots(ncols=2,figsize=(6,5),dpi=200,gridspec_kw={'width_ratios': [4, 1]})
                 td = TaylorDiagram(r['Data'],fig=fig,rect=121,label="Reference",srange=(0.5,1.5))
                 for model in df['Model'].unique():
                     c = df[(df['Model']==model) & (df['Region']==region)]
                     if len(c) != 3: continue
                     td.add_sample(c[c['ScalarName']=='Spatial Standard Deviation']['Data'],
                                   c[c['ScalarName']==       'Spatial Correlation']['Data'],
-                                  marker='o', ms=7, ls='', mfc=clrs[model], label=model)
+                                  marker='o', ms=7, ls='', mfc=clrs[model], mec=clrs[model], label=model)
                 td.add_grid()
                 contours = td.add_contours(colors='0.8')
-                plt.clabel(contours, inline=1, fontsize=10, fmt='%.1f',zorder=-10)
+                plt.clabel(contours, inline=1, fontsize=10, fmt='%.1f')
                 ax1.legend(td.samplePoints,
                            [ p.get_label() for p in td.samplePoints ],
                            numpoints=1, prop=dict(size='small'), loc='upper right')
