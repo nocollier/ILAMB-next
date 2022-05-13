@@ -90,10 +90,13 @@ def critical_soil_moisture(m,**kwargs):
             color='b',ha='center',va='bottom')
     ax.text(df_mls[nwater][0],df_mls['R'][0],'$R_{\mathrm{energy}}-R_{\mathrm{water}}$',
             color='k',ha='center',va='top')
-    ax.text(csm[nwater],df['R'].min(),'$\ CSM=%.2f$' % (csm[nwater]),
+    ax.text(csm[nwater],-1,'$\ CSM=%.2f$' % (csm[nwater]),
             color='k',ha='left',va='bottom')
     ax.set_xlabel('Surface Soil Moisture [vol-%]')
     ax.set_ylabel('Correlation or Correlation Difference [1]')
+    ax.set_ylim(-1.6,1.6)
+    ax.set_xlim(0,1)
+    ax.set_title("%s Correlation Difference Distribution" % m.name)
     plt.savefig(os.path.join(path,"%s_None_dR.png" % (m.name)))
     plt.close()
 
