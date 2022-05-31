@@ -574,13 +574,20 @@ class Confrontation(object):
         if 'Spatial Distribution' in dfs['Analysis'].unique():
             df = dfs[dfs['Analysis']=='Spatial Distribution']
             for region in df['Region'].unique():
-                r = df[(df['Model']=='Reference') & (df['Region']==region)]
+                dfr = df[df['Region']==region]
+                r = dfr[(dfr['Model']=='Reference')]
                 if len(r) != 1: continue
                 r = r.iloc[0]
+
+                # determine range of standard deivation in Taylor plot
+                rng = dfr.loc[dfr['ScalarName']=='Spatial Standard Deviation','Data']/r['Data']
+                pad = 0.1*(rng.max()-rng.min())
+                rng = rng.append(pd.Series([rng.max()+pad,1.5,0.5,rng.min()-pad]))
+
                 fig,[ax0,ax1] = plt.subplots(ncols=2,figsize=(6,5),dpi=200,gridspec_kw={'width_ratios': [4, 1]},tight_layout=True)
-                td = TaylorDiagram(r['Data'],fig=fig,rect=121,label="Reference",srange=(0.5,1.5))
-                for model in df['Model'].unique():
-                    c = df[(df['Model']==model) & (df['Region']==region)]
+                td = TaylorDiagram(r['Data'],fig=fig,rect=121,label="Reference",srange=(rng.min(),rng.max()))
+                for model in dfr['Model'].unique():
+                    c = dfr[(dfr['Model']==model)]
                     if len(c) != 3: continue
                     td.add_sample(c[c['ScalarName']=='Spatial Standard Deviation']['Data'],
                                   c[c['ScalarName']==       'Spatial Correlation']['Data'],
