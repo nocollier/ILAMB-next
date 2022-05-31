@@ -535,14 +535,13 @@ def generate_script(dfp,dfs):
     code,names,types = generate_jsplotly_curves(dfp)
     html += code
 
-    html += """
-      var layout = {
-    	  font: { size: 24 }
-      };"""
     for t in types:
         n = [a for a in names if a.startswith(t) and a.endswith("None")]
         html += """
-      Plotly.newPlot('%s',[%s],layout);""" % (t,",".join(n))
+      var layout_%s = {
+    	  font: { size: 24 }
+      };
+      Plotly.newPlot('%s',[%s],layout_%s);""" % (t,t,",".join(n),t)
         
     html += """
     </script>"""

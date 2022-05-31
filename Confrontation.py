@@ -591,10 +591,10 @@ class Confrontation(object):
                     if len(c) != 3: continue
                     td.add_sample(c[c['ScalarName']=='Spatial Standard Deviation']['Data'],
                                   c[c['ScalarName']==       'Spatial Correlation']['Data'],
-                                  marker='o', ms=7, ls='', mfc=clrs[model], label=model)
+                                  marker='o', ms=7, ls='', mfc=clrs[model], mec=clrs[model], label=model)
                 td.add_grid()
                 contours = td.add_contours(colors='0.8')
-                plt.clabel(contours, inline=1, fontsize=10, fmt='%.1f',zorder=-10)
+                plt.clabel(contours, inline=1, fontsize=10, fmt='%.1f')
                 ax1.legend(td.samplePoints,
                            [ p.get_label() for p in td.samplePoints ],
                            numpoints=1, prop=dict(size='small'), loc='upper right')
