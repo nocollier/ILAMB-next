@@ -1,5 +1,12 @@
-"""
-A class for developing and compariing relationships from gridded data
+"""A class for developing and comparing relationships from gridded data.
+
+This class was developed to help group and manage the data required to
+generate and compare relationships. The module purposefully does not
+depend on the ILAMB Variable object, but rather takes in the xarray
+DataArray. This makes it more useful to users even outside this
+codebase, but also means that the data arrays that you pass in must
+have the units and regional masking already handled.
+
 """
 from dataclasses import dataclass, field
 
