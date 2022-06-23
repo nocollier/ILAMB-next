@@ -436,6 +436,7 @@ class Confrontation(object):
         cmap
         """
         self.source   = kwargs.get(  "source",None)
+        self.name     = kwargs.get("    name","none")
         self.variable = kwargs.get("variable",None)
         self.unit     = kwargs.get(    "unit",None)
         self.regions  = kwargs.get( "regions",[None])
@@ -523,6 +524,7 @@ class Confrontation(object):
         ds = sanitize_into_dataset(cplot)
         ds.attrs = {'name':m.name,'color':m.color}
         ds.to_netcdf(os.path.join(self.path,"%s.nc" % m.name))
+        m.cacheResults(self.name,self.variable,os.path.join(self.path,"%s.nc" % m.name))
         if self.master:
             ds = sanitize_into_dataset(rplot)
             ds.attrs = {'name':'Reference','color':(0,0,0)}
@@ -675,6 +677,7 @@ if __name__ == "__main__":
 
     df = pd.read_pickle('cmip5v6_errors.pkl')
     C = [Confrontation(source = os.path.join(ROOT,"DATA/gpp/FLUXNET2015/gpp.nc"),
+                       name = "FLUXNET2015",
                        variable = "gpp",
                        unit = "g m-2 d-1",
                        regions = [None,"euro"],
@@ -682,6 +685,7 @@ if __name__ == "__main__":
                        path = "./_build/gpp/FLUXNET2015",
                        df_errs = df),
          Confrontation(source = os.path.join(ROOT,"DATA/gpp/FLUXCOM/gpp.nc"),
+                       name = "FLUXCOM",
                        variable = "gpp",
                        unit = "g m-2 d-1",
                        regions = [None,"euro"],

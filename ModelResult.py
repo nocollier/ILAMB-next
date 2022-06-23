@@ -5,6 +5,7 @@ import numpy as np
 import os
 import re
 import cftime
+import pandas as pd
 
 def same_space_grid(V):
     """
@@ -95,7 +96,7 @@ class ModelResult():
         self.area_atm = self.area_ocn = self.frac_lnd = None
 
         # Results caching
-        self.results = {}
+        self.results = None
         
     def __str__(self):
         s  = ""
@@ -349,8 +350,13 @@ class ModelResult():
                         lon   = x, lon_bnds   = xb,
                         depth = d, depth_bnds = db)
     
-    def cacheResults(self,vname,fname):
+    def cacheResults(self,source_name,var_name,path):
+        """Given the data source name and the variable, insert into dataframe.
+
+        Note: this assumes that this tuple will be unique.
         """
-        """
-        if vname not in self.results: self.results[vname] = []
-        self.results[vname].append(fname)
+        add = {'Source':[source_name],'Variable':[var_name],"Path":[path]}
+        if self.results is None:
+            self.results = pd.DataFrame(add)
+        else:
+            self.results = pd.concat([self.results,pd.DataFrame(add)],ignore_index=True)
