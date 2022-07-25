@@ -1,362 +1,392 @@
-from Variable import Variable,align_latlon
-from sympy import sympify
-import xarray as xr
-import numpy as np
+"""A class for abstracting the files associated with a particular model.
+
+"""
 import os
 import re
-import cftime
-import pandas as pd
+from dataclasses import dataclass, field
+from typing import Union
 
-def same_space_grid(V):
+import cftime as cf
+import numpy as np
+import pandas as pd
+import xarray as xr
+from sympy import sympify
+
+from Variable import Variable
+
+
+def same_space_grid_size(vrs: dict[Variable]) -> bool:
     """
-    are the variables all on the same spatial grid?
+    Do all the variables have the same spatial grid sizes?
     """
-    v0 = V[list(V.keys())[0]]
-    if not np.all([V[v].ds[V[v].lat_name].size == v0.ds[v0.lat_name].size for v in V]): return False
-    if not np.all([V[v].ds[V[v].lon_name].size == v0.ds[v0.lon_name].size for v in V]): return False
+    vref = vrs[next(iter(vrs))]
+    if not np.all(
+        [vrs[v].ds[vrs[v].lat_name].size == vref.ds[vref.lat_name].size for v in vrs]
+    ):
+        return False
+    if not np.all(
+        [vrs[v].ds[vrs[v].lon_name].size == vref.ds[vref.lon_name].size for v in vrs]
+    ):
+        return False
     return True
 
-def compute_multimodel_mean(V):
-    """
-    for now require spatial grids are fixed
-    assume we have spatio-temporal data
-    """
-    v0 = V[list(V.keys())[0]]
-    ds = [V[v].ds for v in V]
-    tm = None
-    if v0.temporal():
-        tb = []
-        for v in V:
-            V[v].ds['time'] = [cftime.DatetimeNoLeap(t.dt.year,t.dt.month,t.dt.day) for t in V[v].ds['time']]
-            tbnd = V[v].timeBounds()
-            tb.append(tbnd)
-        t0 = max([t[0] for t in tb])
-        tf = min([t[1] for t in tb])
-        t0 = cftime.DatetimeNoLeap(t0.dt.year,t0.dt.month,1)
-        tf = cftime.DatetimeNoLeap(tf.dt.year,tf.dt.month,28)
-        ds = [d.sel(time=slice(t0,tf)) for d in ds]
-        tm = ds[0]['time_measure']
-    if v0.spatial() and not same_space_grid(V):
-        res = 1.0        
-        lat = np.linspace(-90, 90,int(round(180/res))+1)
-        lon = np.linspace(  0,360,int(round(360/res))+1)
-        lat = 0.5*(lat[:-1]+lat[1:])
-        lon = 0.5*(lon[:-1]+lon[1:])
-        ds  = [d.interp(coords={'lat':lat,'lon':lon},method='nearest') for d in ds]
-    ds = [d[v0.varname] for d in ds]
-    ds = xr.align(*ds,join='override')
-    ds = xr.concat(ds,dim='model').mean(dim='model')
-    mn = Variable(da           = ds,
-                  varname      = v0.varname,
-                  time_measure = tm)
-    mn.ds[mn.varname].attrs = v0.ds[v0.varname].attrs
-    return mn
 
-def compute_time_measure(ds):
+def compute_multimodel_mean(
+    vrs: dict[Variable], grid_resolution: float = 1.0
+) -> Variable:
+    """
+    Given a dictionary of variables, computes the mean. This function can be
+    used to compute the mean from a model's ensemble or a mean from a multimodel
+    group.
+
+    * if the variables are temporal, we will redefine the time dimension to use
+      a 'noleap' calendar
+    * if the spatial grids are not uniformly the same size, we will interpolate
+      to a uniformly spaced grid of size 'grid_resolution'
+
+    Potential problems and improvements:
+
+    * the interpolated grid is set to use longitude on [0,360] which will be
+      problematic if combining models which use a different convention
+    * because we compute the mean by adding a 'model' dimension using
+      xarray.concat, we could implement a standard deviation also and/or a count
+      of contributing models as well
+    * units and variable names are not checked, we assume you have passed us a
+      sensible set of variables to combine
+    """
+    vref = vrs[next(iter(vrs))]
+    dss = [vrs[v].ds for v in vrs]
+    if vref.temporal():
+        tbnd = []
+        for var in vrs:
+            vrs[var].ds["time"] = [
+                cf.DatetimeNoLeap(t.dt.year, t.dt.month, t.dt.day)
+                for t in vrs[var].ds["time"]
+            ]
+            tbnd.append(vrs[var].timeBounds())
+        init_t = max([t[0] for t in tbnd])
+        final_t = min([t[1] for t in tbnd])
+        init_t = cf.DatetimeNoLeap(init_t.dt.year, init_t.dt.month, 1)
+        final_t = cf.DatetimeNoLeap(final_t.dt.year, final_t.dt.month, 28)
+        dss = [ds.sel(time=slice(init_t, final_t)) for ds in dss]
+    if vref.spatial() and not same_space_grid_size(vrs):
+        lat = np.linspace(-90, 90, int(round(180 / grid_resolution)) + 1)
+        lon = np.linspace(0, 360, int(round(360 / grid_resolution)) + 1)
+        lat = 0.5 * (lat[:-1] + lat[1:])
+        lon = 0.5 * (lon[:-1] + lon[1:])
+        dss = [
+            ds.interp(coords={"lat": lat, "lon": lon}, method="nearest") for ds in dss
+        ]
+    dss = [ds[vref.varname] for ds in dss]
+    dss = xr.align(*dss, join="override")
+    dss = xr.concat(dss, dim="model").mean(dim="model")
+    mean = Variable(
+        da=dss, varname=vref.varname, time_measure=compute_time_measure(dss[0])
+    )
+    mean.ds[mean.varname].attrs = vref.ds[vref.varname].attrs
+    return mean
+
+
+def compute_time_measure(vds: xr.Dataset) -> xr.DataArray:
     """
     this is duplicate code from inside Variable
     """
-    dt = None
+    tms = None
     tb_name = None
-    if "bounds" in ds['time'].attrs: tb_name = ds['time'].attrs['bounds']
-    if tb_name is not None and tb_name in ds:
-        dt = ds[tb_name]
-        nb = dt.dims[-1]
-        dt = dt.diff(nb).squeeze()
-        dt *= 1e-9/86400 # [ns] to [d]
-        dt  = dt.astype('float')
-    return dt
+    if "bounds" in vds["time"].attrs:
+        tb_name = vds["time"].attrs["bounds"]
+    if tb_name is not None and tb_name in vds:
+        tms = vds[tb_name]
+        nmb = tms.dims[-1]
+        tms = tms.diff(nmb).squeeze()
+        tms *= 1e-9 / 86400  # [ns] to [d]
+        tms = tms.astype("float")
+    return tms
 
-class ModelResult():
-    """
-    name
-    """
-    def __init__(self,path,**kwargs):
 
-        #
-        self.name = kwargs.get("name","model")
-        self.color = (0,0,0)
+class VarNotInModel(Exception):
+    """A exception to indicate that a variable is not present in the model
+    results."""
 
-        # A 'model' could be a collection of results, as in an
-        # ensemble or a MIP. The collection of results could also be a
-        # perturbation study.
-        self.parent = None
-        self.children = {}
+    def __init__(self, variable: str, model: "ModelResult"):
+        super().__init__(f"{variable} not found in {model.name}")
 
-        # What is the top level directory where files are located?
-        self.path = path
 
-        # What variables do we have and what files are they in?
-        self.variables = {}
+@dataclass
+class ModelResult:
+    """A class for abstracting and managing model results."""
 
-        # Synonyms
-        self.synonyms = {}
+    name: str
+    color: tuple[float] = (0, 0, 0)
+    children: dict = field(init=False, default_factory=dict)
+    synonyms: dict = field(init=False, repr=False, default_factory=dict)
+    variables: dict = field(init=False, repr=False, default_factory=dict)
+    area_atm: xr.DataArray = field(init=False, repr=False, default_factory=lambda: None)
+    area_ocn: xr.DataArray = field(init=False, repr=False, default_factory=lambda: None)
+    frac_lnd: xr.DataArray = field(init=False, repr=False, default_factory=lambda: None)
+    results: pd.DataFrame = field(init=False, repr=False, default_factory=lambda: None)
 
-        # Areas
-        self.area_atm = self.area_ocn = self.frac_lnd = None
-
-        # Results caching
-        self.results = None
-        
-    def __str__(self):
-        s  = ""
-        s += "ModelResult: %s\n" % self.name
-        s += "-"*(len(self.name)+13) + "\n"
-        if self.children:
-            for child in self.children:
-                s += "  + %s\n" % (child)
-        else:
-            for v in sorted(self.variables,key=lambda k: k.lower()):
-                s += "  + %s\n" % (v)
-        return s
-
-    def __repr__(self):
-        return self.__str__()
-
-    def _byRegex(self,group_regex):
-        """
-        """
+    def _by_regex(self, group_regex: str) -> dict:
+        """Create a partition of the variables by regex"""
         groups = {}
-        for v in self.variables.keys():
+        for var, files in self.variables.items():
             to_remove = []
-            for f in self.variables[v]:
-                m = re.search(group_regex,f)
-                if m:
-                    g = m.group(1)
-                    if g not in groups: groups[g] = {}
-                    if v not in groups[g]: groups[g][v] = []
-                    groups[g][v].append(f)
-                    to_remove.append(f)
-            for r in to_remove: self.variables[v].remove(r) # get rid of those we passed to models
+            for filename in files:
+                match = re.search(group_regex, filename)
+                if match:
+                    grp = match.group(1)
+                    if grp not in groups:
+                        groups[grp] = {}
+                    if var not in groups[grp]:
+                        groups[grp][var] = []
+                    groups[grp][var].append(filename)
+                    to_remove.append(filename)
+            for rem in to_remove:
+                self.variables[var].remove(rem)  # get rid of those we passed to models
         return groups
 
-    def _byAttr(self,group_attr):
-        """
-        """
+    def _by_attr(self, group_attr: str) -> dict:
+        """Create a partition of the variables by attr"""
         groups = {}
-        for v in self.variables.keys():
+        for var, files in self.variables.items():
             to_remove = []
-            for f in self.variables[v]:
-                with xr.open_dataset(f) as dset:
+            for filename in files:
+                with xr.open_dataset(filename) as dset:
                     if group_attr in dset.attrs:
-                        g = dset.attrs[group_attr]
-                        if g not in groups: groups[g] = {}
-                        if v not in groups[g]: groups[g][v] = []
-                        groups[g][v].append(f)
-                        to_remove.append(f)
-            for r in to_remove: self.variables[v].remove(r) # get rid of those we passed to models
+                        grp = dset.attrs[group_attr]
+                        if grp not in groups:
+                            groups[grp] = {}
+                        if var not in groups[grp]:
+                            groups[grp][var] = []
+                        groups[grp][var].append(filename)
+                        to_remove.append(filename)
+            for rem in to_remove:
+                self.variables[var].remove(rem)  # get rid of those we passed to models
         return groups
 
-    def findFiles(self,**kwargs):
+    def find_files(
+        self,
+        path: Union[str, list[str]],
+        child_regex: str = None,
+        child_attr: str = None,
+    ):
+        """Given a path or list of paths, find all netCDF files and variables
+        therein. If 'group_regex' or 'group_attr' is given, then this function
+        will create child models based on either a match with a regular
+        expression or an attribute in the global attributes of the file.
         """
-        file_paths
-        group_regex
-        group_attr
-        """
-        file_paths = kwargs.get("file_paths",[self.path])
-        for file_path in file_paths:
-            if file_path is None: continue
-            for root,dirs,files in os.walk(file_path,followlinks=True):
-                for f in files:
-                    if not f.endswith(".nc"): continue
-                    path = os.path.join(root,f)
-                    with xr.open_dataset(path) as dset:
+        if isinstance(path, str):
+            path = [path]
+        for file_path in path:
+            for root, _, files in os.walk(file_path, followlinks=True):
+                for filename in files:
+                    if not filename.endswith(".nc"):
+                        continue
+                    filepath = os.path.join(root, filename)
+                    with xr.open_dataset(filepath) as dset:
                         for key in dset.variables.keys():
-                            if key not in self.variables: self.variables[key] = []
-                            self.variables[key].append(path)
+                            if key not in self.variables:
+                                self.variables[key] = []
+                            self.variables[key].append(filepath)
 
         # create sub-models automatically in different ways
-        group_regex = kwargs.get("group_regex",None)
-        group_attr  = kwargs.get("group_attr" ,None)
-        groups      = {}
-        if not groups and group_regex is not None: groups = self._byRegex(group_regex)
-        if not groups and group_attr  is not None: groups = self._byAttr (group_attr )
-        for g in groups:
-            m = ModelResult(self.path,name=g)
-            m.variables = groups[g]
-            m.parent = self
-            self.children[m.name] = m
+        groups = {}
+        if not groups and child_regex is not None:
+            groups = self._by_regex(child_regex)
+        if not groups and child_attr is not None:
+            groups = self._by_attr(child_attr)
+        for grp, submodel in groups.items():
+            mod = ModelResult(name=grp)
+            mod.variables = submodel
+            self.children[mod.name] = mod
         return self
 
-    def getGridInformation(self):
+    def get_variable(
+        self,
+        vname: str,
+        synonyms: Union[str, list[str]] = None,
+        mean: bool = False,
+        **kwargs: dict,
+    ) -> Union[Variable, dict[Variable]]:
+        """Search the model database for the specified variable."""
+        if not self.children:
+            return self._get_variable_child(
+                vname, synonyms=synonyms, mean=mean, **kwargs
+            )
+        out = {}
+        for child, mod in self.children.items():
+            try:
+                # pylint: disable=protected-access
+                out[child] = mod._get_variable_child(
+                    vname, synonyms=synonyms, mean=mean, **kwargs
+                )
+            except VarNotInModel:
+                pass
+        if len(out) == 0:
+            raise ValueError(f"Cannot find '{vname}' in '{self.name}'")
+        if mean:
+            vmean = compute_multimodel_mean(out)
+            out["mean"] = vmean
+            return out
+        return out
+
+    def _get_variable_child(
+        self,
+        vname: str,
+        synonyms: Union[str, list[str]] = None,
+        **kwargs: dict,
+    ) -> Union[Variable, dict[Variable]]:
+        """Get the model variable out of a single child model."""
+        possible = [vname]
+        if isinstance(synonyms, str):
+            possible.append(synonyms)
+        elif isinstance(synonyms, list):
+            possible += synonyms
+        for pos in possible:
+            if pos in self.synonyms:
+                possible.append(self.synonyms[pos])
+        for var in possible:
+            if var not in self.variables:
+                continue
+            return self._get_variable_no_syn(var, **kwargs)
+        raise VarNotInModel(vname, self)
+
+    def _get_variable_no_syn(self, vname: str, **kwargs: dict):
+        """At some point we need a routine to get the data from the model
+        files without the possibility of synonyms or we end up in an infinite
+        recursion. This is where we should do all the trimming / checking of
+        sites, etc.
         """
-        """
+        # Even if multifile, we need to peak at attributes from one file to get
+        # cell measure information.
+        files = sorted(self.variables[vname])
+        if len(files) == 0:
+            raise VarNotInModel(vname, self)
+        dset = xr.open_dataset(files[0])
+        var = dset[vname]
+        area = None
+        if "cell_measures" in var.attrs and vname not in ["areacella", "areacello"]:
+            if "areacella" in var.attrs["cell_measures"] and self.area_atm is not None:
+                area = self.area_atm.copy()
+            if "areacello" in var.attrs["cell_measures"] and self.area_ocn is not None:
+                area = self.area_ocn.copy()
+            if "cell_methods" in var.attrs and area is not None:
+                if (
+                    "where land" in var.attrs["cell_methods"]
+                    and self.frac_lnd is not None
+                ):
+                    area *= self.frac_lnd
+
+        # initialize the variable with time trimming
+        init_t = kwargs.get("t0", None)
+        final_t = kwargs.get("tf", None)
+        if len(files) == 1:
+            var = Variable(
+                filename=files[0],
+                varname=vname,
+                cell_measure=area,
+                t0=init_t,
+                tf=final_t,
+            )
+        else:
+            var = [xr.open_dataset(v).sel(time=slice(init_t, final_t)) for v in files]
+            var = sorted([v for v in var if v.time.size > 0], key=lambda a: a.time[0])
+            var = xr.concat(var, dim="time")
+            var = Variable(
+                da=var[vname],
+                varname=vname,
+                cell_measure=area,
+                time_measure=compute_time_measure(var),
+            )
+        # This is where we would put site extraction?
+        return var
+
+    def get_grid_information(self):
+        """If part of the model, grab the atmosphere and ocean cell areas as
+        well as the land fractions. When a variable is obtained from the model,
+        these measures are passed along along based on the 'cell_measures'
+        attribute in the netCDF file."""
         atm = ocn = lnd = None
         try:
-            atm = self._getVariableChild("areacella",synonyms=["area"]).convert("m2")
+            atm = self._get_variable_child("areacella", synonyms="area").convert("m2")
             atm = atm.ds[atm.varname]
-        except Exception as e:
+        except VarNotInModel:
             pass
         try:
-            ocn = self._getVariableChild("areacello").convert("m2")
+            ocn = self._get_variable_child("areacello").convert("m2")
             ocn = ocn.ds[ocn.varname]
-        except Exception as e:
+        except VarNotInModel:
             pass
         try:
-            lnd = self._getVariableChild("sftlf",synonyms=["landfrac"]).convert("1")
+            lnd = self._get_variable_child("sftlf", synonyms="landfrac").convert("1")
             lnd = lnd.ds[lnd.varname]
-        except Exception as e:
+        except VarNotInModel:
             pass
-        if atm is not None and lnd is not None: atm,lnd = xr.align(atm,lnd,join='override',copy=False)
-        if atm is not None: self.area_atm = atm
-        if ocn is not None: self.area_ocn = ocn
-        if lnd is not None: self.frac_lnd = lnd
-        for child in self.children: self.children[child].getGridInformation()
+        if atm is not None and lnd is not None:
+            # pylint: disable=unbalanced-tuple-unpacking
+            atm, lnd = xr.align(atm, lnd, join="override", copy=False)
+        if atm is not None:
+            self.area_atm = atm
+        if ocn is not None:
+            self.area_ocn = ocn
+        if lnd is not None:
+            self.frac_lnd = lnd
+        for child, _ in self.children.items():
+            self.children[child].get_grid_information()
 
-    def addModel(self,m):
-        """
-        m : ILAMB.ModelResult or list of ILAMB.ModelResult
-          the model(s) to add as children
-        """
-        if type(m) == type(self):
-            if m.name not in self.children:
-                self.children[m.name] = m
-                m.parent = self
-        elif type(m) == type([]):
-            for mm in m:
-                if type(mm) != type(self): continue
-                if mm.name not in self.children:
-                    self.children[mm.name] = mm
-                    mm.parent = self
-
-    def addSynonym(self,expr):
-        """
-
-        """
-        assert type(expr) == type("")
-        if expr.count("=") != 1: raise ValueError("Add a synonym by providing a string of the form 'a = b + c'")
-        key,expr = expr.split("=")
-        if key not in self.synonyms: self.synonyms[key] = []
+    def add_synonym(self, expr):
+        """Add synonyms that will be global for any variable or expression
+        pulled from this model."""
+        assert isinstance(expr, str)
+        if expr.count("=") != 1:
+            raise ValueError("Add a synonym by providing a string of the form 'a = b'")
+        key, expr = expr.split("=")
         # check that the free symbols of the expression are variables
         for arg in sympify(expr).free_symbols:
             assert arg.name in self.variables
-        self.synonyms[key].append(expr)
+        self.synonyms[key] = expr
 
-    def getVariable(self,vname,**kwargs):
-        """
-        synonyms
-        mean
-        """
-        mean = kwargs.get("mean",False)
-        if not self.children: return self._getVariableChild(vname,**kwargs)
-        v = {}
-        for child in self.children:
-            try:
-                v[child] = self.children[child]._getVariableChild(vname,**kwargs)
-            except:
-                pass
-        if len(v)==0: raise ValueError("Cannot find '%s' in '%s'" % (vname,self.name))
-        if mean:
-            vmean = compute_multimodel_mean(v)
-            return v,vmean
-        return v
+    def add_model(self, mod: Union["ModelResult", list["ModelResult"]]):
+        """Add a child model to this model."""
+        if isinstance(mod, ModelResult):
+            mod = [mod]
+        for child in mod:
+            if child.name not in self.children:
+                self.children[child.name] = child
 
-    def _getVariableChild(self,vname,**kwargs):
-        """
-        synonymns
-        """
-        # If a model has synonyms defined, these take
-        # prescendence. But we may need to look for they using the
-        # synonyms provided in the 'getVariable' call.
-        synonyms = kwargs.get("synonyms",[])
-        if type(synonyms) != type([]): synonyms = [synonyms]
-        synonyms = [vname,] + synonyms
-        Ss = [s for s in synonyms if s in self.synonyms ]
-        Vs = [s for s in synonyms if s in self.variables]
-        if Ss: return self._getVariableExpression(vname,self.synonyms[Ss[0]][0],**kwargs)
-        if Vs: return self._getVariableNoSyn(Vs[0],**kwargs)
-        raise ValueError("Cannot find '%s' in '%s'" % (vname,self.name))
 
-    def _getVariableNoSyn(self,vname,**kwargs):
-        """At some point we need a routine to get the data from the model
-        files without the possibility of synonyms or we end up in an
-        infinite recursion. This is where we should do all the
-        trimming / checking of sites, etc.
-        """
-        # Even if multifile, we need to peak at attributes from one file
-        V = sorted(self.variables[vname])
-        if len(V) == 0:
-            raise ValueError("No %s file available in %s" % (vname,self.name))
-        else:
-            dset = xr.open_dataset(V[0])
-        v = dset[vname]
+if __name__ == "__main__":
 
-        # Scan attributes for cell measure information
-        area = None
-        if "cell_measures" in v.attrs and vname not in ["areacella","areacello"]:
-            if ("areacella" in v.attrs["cell_measures"] and
-                self.area_atm is not None): area = self.area_atm.copy()
-            if ("areacello" in v.attrs["cell_measures"] and
-                self.area_ocn is not None): area = self.area_ocn.copy()
-            if "cell_methods" in v.attrs and area is not None:
-                if ("where land" in v.attrs["cell_methods"] and
-                    self.frac_lnd is not None): area *= self.frac_lnd
+    def test_model_ensemble():
+        """tests a model ensemble"""
+        mod = ModelResult(name="CESM2")
+        mod.find_files(
+            "/home/nate/data/ILAMB/MODELS/CESM/",
+            child_regex=r"(r\d+i\d+p\d+f\d+)",
+        )
+        mod.get_grid_information()
+        var = mod.get_variable("gpp", t0="1980-01-01", tf="2000-01-01", mean=True)
+        scalar = (
+            var["mean"]
+            .integrate(dim="time", mean=True)
+            .integrate(dim="space")
+            .convert("Pg yr-1")
+        )
+        assert np.allclose(scalar.ds[scalar.varname], 128.8194)
 
-        t0 = kwargs.get("t0",None)
-        tf = kwargs.get("tf",None)
-        if len(V) == 1:
-            v = Variable(filename=V[0],varname=vname,cell_measure=area,t0=t0,tf=tf)
-        else:
-            V = [xr.open_dataset(v).sel(time=slice(t0,tf)) for v in V]
-            V = sorted([v for v in V if v.time.size>0],key=lambda a:a.time[0])
-            try:
-                ds = xr.concat(V,dim='time')
-            except:
-                msg = "Could not concat variable '%s' from files:\n  %s" % (vname,"\n  ".join(sorted(self.variables[vname])))
-                raise ValueError(msg)
-            v = Variable(da=ds[vname],varname=vname,cell_measure=area,time_measure=compute_time_measure(ds))
+    def test_single_model():
+        """tests a single model"""
+        mod = ModelResult(name="CESM2")
+        mod.find_files("/home/nate/data/ILAMB/MODELS/CMIP6/CESM2")
+        mod.get_grid_information()
+        mod.add_synonym("GPP=gpp")
+        var = mod.get_variable("GPP", t0="1980-01-01", tf="2000-01-01")
+        scalar = (
+            var.integrate(dim="time", mean=True)
+            .integrate(dim="space")
+            .convert("Pg yr-1")
+        )
+        assert np.allclose(scalar.ds[scalar.varname], 108.8057)
 
-        latlon = kwargs.get("latlon",None)
-        if latlon is not None:
-            raise ValueError("Datasite extraction not yet implemented")
-            lat,lon = latlon
-            if v.lon.data.max() > 180:
-                if lon < 0: lon += 360
-            v = v.sel(lat=lat,lon=lon,method='nearest')
-
-        return v
-
-    def _getVariableExpression(self,vname,expr,**kwargs):
-        """
-        """
-        def _checkDim(dimref,dim):
-            if dimref is None: dimref = dim
-            if dim is not None: assert(np.allclose(dimref,dim))
-            return dimref
-        t = tb = x = xb = y = yb = d = db = n = A = mask = None
-        data = {}; unit = {}
-        for arg in sympify(expr).free_symbols:
-            v  = self._getVariableNoSyn(arg.name,**kwargs)
-            t  = _checkDim(t ,v.time)
-            tb = _checkDim(tb,v.time_bnds)
-            x  = _checkDim(x ,v.lon)
-            xb = _checkDim(xb,v.lon_bnds)
-            y  = _checkDim(y ,v.lat)
-            yb = _checkDim(yb,v.lat_bnds)
-            d  = _checkDim(d ,v.depth)
-            db = _checkDim(db,v.depth_bnds)
-            n  = _checkDim(n ,v.ndata)
-            A  = _checkDim(A ,v.area)
-            data[arg.name] = v.data.data
-            unit[arg.name] = v.unit
-            if mask is None: mask = v.data.mask
-            mask += v.data.mask
-        with np.errstate(all='ignore'):
-            result,unit = il.SympifyWithArgsUnits(expr,data,unit)
-        data = np.ma.masked_array(np.nan_to_num(result),mask=mask+np.isnan(result))
-        return Variable(name = vname, unit = unit, data = data, ndata = n, area = A,
-                        time  = t, time_bnds  = tb,
-                        lat   = y, lat_bnds   = yb,
-                        lon   = x, lon_bnds   = xb,
-                        depth = d, depth_bnds = db)
-    
-    def cacheResults(self,source_name,var_name,path):
-        """Given the data source name and the variable, insert into dataframe.
-
-        Note: this assumes that this tuple will be unique.
-        """
-        add = {'Source':[source_name],'Variable':[var_name],"Path":[path]}
-        if self.results is None:
-            self.results = pd.DataFrame(add)
-        else:
-            self.results = pd.concat([self.results,pd.DataFrame(add)],ignore_index=True)
+    test_single_model()
+    test_model_ensemble()
